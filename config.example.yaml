@@ -1,0 +1,81 @@
+server:
+  socket_path: /var/run/yllmd/yllmd.sock
+  socket_mode: "0660"
+  socket_group: yllm
+
+queue:
+  policy: fifo
+  max_depth: 128
+  default_timeout: 2m
+
+model_lifecycle:
+  resident_model: fast
+  idle_cooldown: 15m
+  max_loaded_models: 1
+  use_current_or_better: true
+  unavailable_tier_policy: use_available
+
+paths:
+  state_dir: /var/lib/yllmd
+  model_dir: /var/lib/yllmd/models
+  runtime_dir: /var/run/yllmd
+  log_dir: /var/log/yllmd
+
+updates:
+  check_interval: 24h
+  default_policy: notify
+
+local_models:
+  fast:
+    catalog_id: qwen2_5_1_5b_instruct_q4
+    tier: fast
+    resident: true
+    backend:
+      type: process
+      command: /usr/local/libexec/yllama-runner
+      transport: stdio
+    runtime:
+      context_tokens: 8192
+      threads: 4
+
+  balanced:
+    catalog_id: qwen2_5_7b_instruct_q4
+    tier: balanced
+    resident: false
+    backend:
+      type: process
+      command: /usr/local/libexec/yllama-runner
+      transport: stdio
+    runtime:
+      context_tokens: 16384
+      threads: 8
+
+  deep:
+    catalog_id: qwen2_5_14b_instruct_q4
+    tier: deep
+    resident: false
+    backend:
+      type: process
+      command: /usr/local/libexec/yllama-runner
+      transport: stdio
+    runtime:
+      context_tokens: 32768
+      threads: 12
+
+remote_providers:
+  openai:
+    enabled: false
+    api_key_env: OPENAI_API_KEY
+
+  gemini:
+    enabled: false
+    api_key_env: GEMINI_API_KEY
+
+  anthropic:
+    enabled: false
+    api_key_env: ANTHROPIC_API_KEY
+
+routing:
+  default_provider: local
+  allow_auto_remote: false
+  require_explicit_remote_provider: true
