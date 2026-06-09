@@ -69,16 +69,20 @@ func runModels(socketPath string, args []string) {
 }
 
 func runModelsInstall(socketPath string, args []string) {
+	if len(args) == 0 {
+		usage()
+		os.Exit(2)
+	}
+	model := args[0]
 	installFlags := flag.NewFlagSet("models install", flag.ExitOnError)
 	file := installFlags.String("file", "", "local GGUF file to install")
 	version := installFlags.String("version", "", "model version id")
 	sha256 := installFlags.String("sha256", "", "expected SHA-256 checksum")
 	activate := installFlags.Bool("activate", true, "activate the installed version")
-	if err := installFlags.Parse(args); err != nil {
+	if err := installFlags.Parse(args[1:]); err != nil {
 		fatal(err)
 	}
-	remaining := installFlags.Args()
-	if len(remaining) != 1 {
+	if len(installFlags.Args()) != 0 {
 		usage()
 		os.Exit(2)
 	}
@@ -91,7 +95,7 @@ func runModelsInstall(socketPath string, args []string) {
 		Type:     protocol.MessageModels,
 		ID:       requestID(protocol.MessageModels),
 		Action:   "install",
-		Model:    remaining[0],
+		Model:    model,
 		Version:  *version,
 		File:     *file,
 		SHA256:   *sha256,
