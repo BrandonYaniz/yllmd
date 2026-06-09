@@ -28,6 +28,8 @@ type RunnerProvider struct {
 
 	mu      sync.Mutex
 	session *runnerSession
+	timer   *time.Timer
+	epoch   uint64
 }
 
 type runnerSession struct {
@@ -111,11 +113,15 @@ func (p *RunnerProvider) Generate(ctx context.Context, request providers.Generat
 func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, request providers.GenerateRequest, events chan<- protocol.Event) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.epoch++
+	epoch := p.epoch
+	p.stopCooldownLocked()
 
 	session, err := p.sessionFor(ctx, model, "configure-"+request.ID)
 	if err != nil {
 		return err
 	}
+	defer p.scheduleCooldownLocked(model.Name, epoch)
 
 	cancelDone := make(chan struct{})
 	go func() {
@@ -176,12 +182,55 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 func (p *RunnerProvider) Close(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.stopCooldownLocked()
 	if p.session == nil {
 		return nil
 	}
 	err := p.session.close(ctx, "shutdown-provider")
 	p.session = nil
 	return err
+}
+
+func (p *RunnerProvider) stopCooldownLocked() {
+	if p.timer != nil {
+		p.timer.Stop()
+		p.timer = nil
+	}
+}
+
+func (p *RunnerProvider) scheduleCooldownLocked(modelName string, epoch uint64) {
+	if p.cfg.ModelLifecycle.IdleCooldown <= 0 || modelName == p.cfg.ModelLifecycle.ResidentModel {
+		return
+	}
+	p.stopCooldownLocked()
+	cooldown := p.cfg.ModelLifecycle.IdleCooldown
+	p.timer = time.AfterFunc(cooldown, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.epoch != epoch {
+			return
+		}
+		if p.session == nil || p.session.modelName == p.cfg.ModelLifecycle.ResidentModel {
+			return
+		}
+		resident, err := p.registry.Resident()
+		if err != nil {
+			p.logger.Debug("resident model unavailable during cooldown", "error", err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := p.session.close(ctx, "shutdown-idle-cooldown"); err != nil {
+			p.logger.Debug("runner shutdown during idle cooldown failed", "model", p.session.modelName, "error", err)
+		}
+		p.session = nil
+		session, err := p.startSession(ctx, resident, "configure-idle-resident")
+		if err != nil {
+			p.logger.Debug("resident model reload after cooldown failed", "model", resident.Name, "error", err)
+			return
+		}
+		p.session = session
+	})
 }
 
 func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel, configureID string) (*runnerSession, error) {

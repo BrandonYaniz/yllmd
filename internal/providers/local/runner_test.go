@@ -107,6 +107,32 @@ func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	}
 }
 
+func TestRunnerProviderCooldownReloadsResidentModel(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
+	runnerPath := writeFakeRunner(t)
+	cfg := runnerTestConfig(t, runnerPath)
+	cfg.ModelLifecycle.IdleCooldown = 25 * time.Millisecond
+	cfg.LocalModels["deep"] = config.LocalModelConfig{
+		Tier:      "deep",
+		ModelPath: filepath.Join(t.TempDir(), "deep.gguf"),
+		Backend: config.LocalBackendConfig{
+			Type:      "process",
+			Command:   runnerPath,
+			Transport: "stdio",
+		},
+		Runtime: config.LocalRuntimeSettings{
+			ContextTokens: 2048,
+			Threads:       4,
+		},
+	}
+	provider := NewRunnerProvider(cfg, nil)
+	defer closeProvider(t, provider)
+
+	drainGenerateModel(t, provider, "req-deep", "deep", "use deep")
+	waitForLog(t, logPath, "configure configure-idle-resident")
+}
+
 func writeFakeRunner(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fake-runner.sh")
@@ -155,6 +181,7 @@ func runnerTestConfig(t *testing.T, runnerPath string) config.Config {
 		Paths: config.PathsConfig{ModelDir: t.TempDir()},
 		ModelLifecycle: config.ModelLifecycleConfig{
 			ResidentModel: "fast",
+			IdleCooldown:  time.Hour,
 		},
 		LocalModels: map[string]config.LocalModelConfig{
 			"fast": {
@@ -185,24 +212,46 @@ func closeProvider(t *testing.T, provider *RunnerProvider) {
 
 func drainGenerate(t *testing.T, provider *RunnerProvider, id, prompt string) {
 	t.Helper()
+	drainGenerateModel(t, provider, id, "fast", prompt)
+}
+
+func drainGenerateModel(t *testing.T, provider *RunnerProvider, id, model, prompt string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	events, err := provider.Generate(ctx, providers.GenerateRequest{
 		ID:     id,
-		Model:  "fast",
+		Model:  model,
 		Stream: false,
 		Input:  protocol.Input{Kind: "prompt", Prompt: prompt},
 	})
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
+	var completed bool
 	for event := range events {
 		if event.Type == "error" {
 			t.Fatalf("unexpected error event: %#v", event)
 		}
 		if event.Type == "completed" {
-			return
+			completed = true
 		}
 	}
-	t.Fatal("expected completed event")
+	if !completed {
+		t.Fatal("expected completed event")
+	}
+}
+
+func waitForLog(t *testing.T, path, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	data, _ := os.ReadFile(path)
+	t.Fatalf("timed out waiting for %q in log:\n%s", want, string(data))
 }
