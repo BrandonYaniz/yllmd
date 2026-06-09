@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 		},
 	}
 	provider := NewRunnerProvider(cfg, nil)
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), time.Second)
+		defer closeCancel()
+		if err := provider.Close(closeCtx); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -75,25 +83,62 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 	}
 }
 
+func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
+	runnerPath := writeFakeRunner(t)
+	cfg := runnerTestConfig(t, runnerPath)
+	provider := NewRunnerProvider(cfg, nil)
+	defer closeProvider(t, provider)
+
+	drainGenerate(t, provider, "req-1", "first")
+	drainGenerate(t, provider, "req-2", "second")
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read runner log: %v", err)
+	}
+	log := string(data)
+	if count := strings.Count(log, "configure "); count != 1 {
+		t.Fatalf("configure count = %d, log:\n%s", count, log)
+	}
+	if count := strings.Count(log, "generate "); count != 2 {
+		t.Fatalf("generate count = %d, log:\n%s", count, log)
+	}
+}
+
 func writeFakeRunner(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fake-runner.sh")
 	script := `#!/bin/sh
+log_event() {
+  if [ -n "$YLLMD_FAKE_RUNNER_LOG" ]; then
+    printf '%s\n' "$1" >> "$YLLMD_FAKE_RUNNER_LOG"
+  fi
+}
+extract_id() {
+  printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
 printf '%s\n' '{"type":"hello","protocol_version":1,"runner":"yllama-runner","capabilities":["generate","stream","cancel"]}'
 while IFS= read -r line; do
+  id=$(extract_id "$line")
   case "$line" in
     *'"type":"configure"'*)
-      printf '%s\n' '{"type":"ready","id":"configure-req-1","model_path":"/tmp/model.gguf","context_tokens":1024}'
+      log_event "configure $id"
+      printf '%s\n' "{\"type\":\"ready\",\"id\":\"$id\",\"model_path\":\"/tmp/model.gguf\",\"context_tokens\":1024}"
       ;;
     *'"type":"generate"'*)
-      printf '%s\n' '{"type":"started","id":"req-1"}'
-      printf '%s\n' '{"type":"completed","id":"req-1","finish_reason":"stop","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5},"text":"fake runner response"}'
+      log_event "generate $id"
+      printf '%s\n' "{\"type\":\"started\",\"id\":\"$id\"}"
+      printf '%s\n' "{\"type\":\"completed\",\"id\":\"$id\",\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5},\"text\":\"fake runner response\"}"
       ;;
     *'"type":"shutdown"'*)
+      log_event "shutdown $id"
       exit 0
       ;;
     *'"type":"cancel"'*)
-      printf '%s\n' '{"type":"cancelled","id":"req-1"}'
+      log_event "cancel $id"
+      printf '%s\n' "{\"type\":\"cancelled\",\"id\":\"$id\"}"
       ;;
   esac
 done
@@ -102,4 +147,62 @@ done
 		t.Fatalf("write fake runner: %v", err)
 	}
 	return path
+}
+
+func runnerTestConfig(t *testing.T, runnerPath string) config.Config {
+	t.Helper()
+	return config.Config{
+		Paths: config.PathsConfig{ModelDir: t.TempDir()},
+		ModelLifecycle: config.ModelLifecycleConfig{
+			ResidentModel: "fast",
+		},
+		LocalModels: map[string]config.LocalModelConfig{
+			"fast": {
+				Tier:      "fast",
+				ModelPath: filepath.Join(t.TempDir(), "model.gguf"),
+				Backend: config.LocalBackendConfig{
+					Type:      "process",
+					Command:   runnerPath,
+					Transport: "stdio",
+				},
+				Runtime: config.LocalRuntimeSettings{
+					ContextTokens: 1024,
+					Threads:       2,
+				},
+			},
+		},
+	}
+}
+
+func closeProvider(t *testing.T, provider *RunnerProvider) {
+	t.Helper()
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), time.Second)
+	defer closeCancel()
+	if err := provider.Close(closeCtx); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func drainGenerate(t *testing.T, provider *RunnerProvider, id, prompt string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	events, err := provider.Generate(ctx, providers.GenerateRequest{
+		ID:     id,
+		Model:  "fast",
+		Stream: false,
+		Input:  protocol.Input{Kind: "prompt", Prompt: prompt},
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for event := range events {
+		if event.Type == "error" {
+			t.Fatalf("unexpected error event: %#v", event)
+		}
+		if event.Type == "completed" {
+			return
+		}
+	}
+	t.Fatal("expected completed event")
 }

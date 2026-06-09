@@ -21,6 +21,10 @@ func (p *FakeProvider) ID() string {
 	return "local"
 }
 
+func (p *FakeProvider) Close(ctx context.Context) error {
+	return nil
+}
+
 func (p *FakeProvider) Generate(ctx context.Context, request providers.GenerateRequest) (<-chan protocol.Event, error) {
 	events := make(chan protocol.Event)
 	go func() {

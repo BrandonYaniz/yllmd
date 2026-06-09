@@ -19,3 +19,7 @@ type Provider interface {
 	ID() string
 	Generate(ctx context.Context, request GenerateRequest) (<-chan protocol.Event, error)
 }
+
+type Closeable interface {
+	Close(ctx context.Context) error
+}

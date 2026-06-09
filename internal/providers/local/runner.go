@@ -25,6 +25,18 @@ type RunnerProvider struct {
 	cfg      config.Config
 	registry models.Registry
 	logger   *slog.Logger
+
+	mu      sync.Mutex
+	session *runnerSession
+}
+
+type runnerSession struct {
+	modelName string
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	lines     <-chan lineResult
+	done      <-chan error
+	stdinMu   sync.Mutex
 }
 
 type runnerEvent struct {
@@ -97,74 +109,25 @@ func (p *RunnerProvider) Generate(ctx context.Context, request providers.Generat
 }
 
 func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, request providers.GenerateRequest, events chan<- protocol.Event) error {
-	cmd := exec.Command(model.Config.Backend.Command)
-	stdin, err := cmd.StdinPipe()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	session, err := p.sessionFor(ctx, model, "configure-"+request.ID)
 	if err != nil {
-		return fmt.Errorf("open runner stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("open runner stdout: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("open runner stderr: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start runner: %w", err)
+		return err
 	}
 
-	var stdinMu sync.Mutex
-	lines := readRunnerLines(stdout)
-	go p.logRunnerStderr(stderr, model.Name)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-	defer func() {
-		_ = writeRunnerCommand(&stdinMu, stdin, runnerIDCommand{Type: "shutdown", ID: "shutdown-" + request.ID})
-		_ = stdin.Close()
-		select {
-		case <-done:
-		case <-time.After(500 * time.Millisecond):
-			_ = cmd.Process.Kill()
-			<-done
-		}
-	}()
-
-	cancelSent := make(chan struct{})
+	cancelDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = writeRunnerCommand(&stdinMu, stdin, runnerIDCommand{Type: "cancel", ID: request.ID})
-		case <-cancelSent:
+			_ = session.write(runnerIDCommand{Type: "cancel", ID: request.ID})
+		case <-cancelDone:
 		}
 	}()
-	defer close(cancelSent)
+	defer close(cancelDone)
 
-	hello, err := readRunnerEvent(ctx, lines)
-	if err != nil {
-		return err
-	}
-	if err := validateHello(hello); err != nil {
-		return err
-	}
-
-	if err := writeRunnerCommand(&stdinMu, stdin, runnerConfigureCommand{
-		Type:          "configure",
-		ID:            "configure-" + request.ID,
-		ModelPath:     model.ModelPath,
-		ContextTokens: model.Config.Runtime.ContextTokens,
-		Threads:       model.Config.Runtime.Threads,
-	}); err != nil {
-		return fmt.Errorf("send runner configure: %w", err)
-	}
-	if err := waitForReady(ctx, lines, "configure-"+request.ID); err != nil {
-		return err
-	}
-
-	if err := writeRunnerCommand(&stdinMu, stdin, runnerGenerateCommand{
+	if err := session.write(runnerGenerateCommand{
 		Type:  "generate",
 		ID:    request.ID,
 		Input: request.Input,
@@ -176,12 +139,14 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 			Stop:        request.Settings.Stop,
 		},
 	}); err != nil {
+		p.discardSession(ctx)
 		return fmt.Errorf("send runner generate: %w", err)
 	}
 
 	for {
-		event, err := readRunnerEvent(ctx, lines)
+		event, err := session.readEvent(ctx)
 		if err != nil {
+			p.discardSession(ctx)
 			return err
 		}
 		switch event.Type {
@@ -205,6 +170,133 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 		default:
 			p.logger.Debug("ignoring unknown runner event", "type", event.Type)
 		}
+	}
+}
+
+func (p *RunnerProvider) Close(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.session == nil {
+		return nil
+	}
+	err := p.session.close(ctx, "shutdown-provider")
+	p.session = nil
+	return err
+}
+
+func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel, configureID string) (*runnerSession, error) {
+	if p.session != nil && p.session.modelName == model.Name {
+		return p.session, nil
+	}
+	if p.session != nil {
+		if err := p.session.close(ctx, "shutdown-switch-model"); err != nil {
+			p.logger.Debug("runner shutdown during model switch failed", "model", p.session.modelName, "error", err)
+		}
+		p.session = nil
+	}
+	session, err := p.startSession(ctx, model, configureID)
+	if err != nil {
+		return nil, err
+	}
+	p.session = session
+	return session, nil
+}
+
+func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalModel, configureID string) (*runnerSession, error) {
+	cmd := exec.Command(model.Config.Backend.Command)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open runner stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open runner stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open runner stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start runner: %w", err)
+	}
+
+	var stdinMu sync.Mutex
+	lines := readRunnerLines(stdout)
+	go p.logRunnerStderr(stderr, model.Name)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	session := &runnerSession{
+		modelName: model.Name,
+		cmd:       cmd,
+		stdin:     stdin,
+		lines:     lines,
+		done:      done,
+		stdinMu:   stdinMu,
+	}
+
+	hello, err := session.readEvent(ctx)
+	if err != nil {
+		_ = session.close(context.Background(), "shutdown-start-failed")
+		return nil, err
+	}
+	if err := validateHello(hello); err != nil {
+		_ = session.close(context.Background(), "shutdown-invalid-hello")
+		return nil, err
+	}
+
+	if err := session.write(runnerConfigureCommand{
+		Type:          "configure",
+		ID:            configureID,
+		ModelPath:     model.ModelPath,
+		ContextTokens: model.Config.Runtime.ContextTokens,
+		Threads:       model.Config.Runtime.Threads,
+	}); err != nil {
+		_ = session.close(context.Background(), "shutdown-configure-failed")
+		return nil, fmt.Errorf("send runner configure: %w", err)
+	}
+	if err := waitForReady(ctx, session, configureID); err != nil {
+		_ = session.close(context.Background(), "shutdown-not-ready")
+		return nil, err
+	}
+	return session, nil
+}
+
+func (p *RunnerProvider) discardSession(ctx context.Context) {
+	if p.session == nil {
+		return
+	}
+	_ = p.session.close(ctx, "shutdown-discard")
+	p.session = nil
+}
+
+func (s *runnerSession) write(command any) error {
+	return writeRunnerCommand(&s.stdinMu, s.stdin, command)
+}
+
+func (s *runnerSession) readEvent(ctx context.Context) (runnerEvent, error) {
+	return readRunnerEvent(ctx, s.lines)
+}
+
+func (s *runnerSession) close(ctx context.Context, id string) error {
+	_ = s.write(runnerIDCommand{Type: "shutdown", ID: id})
+	_ = s.stdin.Close()
+	select {
+	case err := <-s.done:
+		return err
+	case <-ctx.Done():
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		return ctx.Err()
+	case <-time.After(500 * time.Millisecond):
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		<-s.done
+		return nil
 	}
 }
 
@@ -276,9 +368,13 @@ func hasCapability(capabilities []string, required string) bool {
 	return false
 }
 
-func waitForReady(ctx context.Context, lines <-chan lineResult, id string) error {
+type runnerEventReader interface {
+	readEvent(ctx context.Context) (runnerEvent, error)
+}
+
+func waitForReady(ctx context.Context, reader runnerEventReader, id string) error {
 	for {
-		event, err := readRunnerEvent(ctx, lines)
+		event, err := reader.readEvent(ctx)
 		if err != nil {
 			return err
 		}

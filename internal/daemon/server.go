@@ -78,6 +78,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer func() {
+		if closeable, ok := s.provider.(providers.Closeable); ok {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := closeable.Close(shutdownCtx); err != nil {
+				s.logger.Debug("provider close failed", "error", err)
+			}
+		}
 		_ = ln.Close()
 		_ = os.Remove(s.cfg.Server.SocketPath)
 	}()
