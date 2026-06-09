@@ -160,8 +160,8 @@ func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 }
 
 func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
-	if req.Input == nil {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: "generate request requires input"})
+	if err := req.ValidateGenerate(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
 		return
 	}
 	if req.Provider == "" || req.Provider == "auto" {

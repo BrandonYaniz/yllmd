@@ -28,6 +28,110 @@ func TestDecodeRequiresID(t *testing.T) {
 	}
 }
 
+func TestValidateGenerateAcceptsMessages(t *testing.T) {
+	req := Request{
+		Type: MessageGenerate,
+		ID:   "req-1",
+		Input: &Input{
+			Kind: "messages",
+			Messages: []Message{
+				{Role: "system", Content: "Answer clearly."},
+				{Role: "user", Content: "Hello."},
+				{Role: "assistant", Content: "Hi."},
+			},
+		},
+		Queue: QueueOptions{Policy: "wait", TimeoutMS: 1000},
+	}
+	if err := req.ValidateGenerate(); err != nil {
+		t.Fatalf("ValidateGenerate returned error: %v", err)
+	}
+}
+
+func TestValidateGenerateRejectsInvalidRequests(t *testing.T) {
+	temperature := -1.0
+	topP := 1.1
+	maxTokens := 0
+	tests := []struct {
+		name string
+		req  Request
+	}{
+		{
+			name: "missing input",
+			req:  Request{Type: MessageGenerate, ID: "req-1"},
+		},
+		{
+			name: "empty prompt",
+			req: Request{
+				Type:  MessageGenerate,
+				ID:    "req-1",
+				Input: &Input{Kind: "prompt", Prompt: " "},
+			},
+		},
+		{
+			name: "empty messages",
+			req: Request{
+				Type:  MessageGenerate,
+				ID:    "req-1",
+				Input: &Input{Kind: "messages"},
+			},
+		},
+		{
+			name: "bad role",
+			req: Request{
+				Type: MessageGenerate,
+				ID:   "req-1",
+				Input: &Input{
+					Kind:     "messages",
+					Messages: []Message{{Role: "tool", Content: "reserved"}},
+				},
+			},
+		},
+		{
+			name: "negative temperature",
+			req: Request{
+				Type:     MessageGenerate,
+				ID:       "req-1",
+				Input:    &Input{Kind: "prompt", Prompt: "hello"},
+				Settings: GenerationSettings{Temperature: &temperature},
+			},
+		},
+		{
+			name: "bad top p",
+			req: Request{
+				Type:     MessageGenerate,
+				ID:       "req-1",
+				Input:    &Input{Kind: "prompt", Prompt: "hello"},
+				Settings: GenerationSettings{TopP: &topP},
+			},
+		},
+		{
+			name: "bad max tokens",
+			req: Request{
+				Type:     MessageGenerate,
+				ID:       "req-1",
+				Input:    &Input{Kind: "prompt", Prompt: "hello"},
+				Settings: GenerationSettings{MaxTokens: &maxTokens},
+			},
+		},
+		{
+			name: "bad queue policy",
+			req: Request{
+				Type:  MessageGenerate,
+				ID:    "req-1",
+				Input: &Input{Kind: "prompt", Prompt: "hello"},
+				Queue: QueueOptions{Policy: "drop"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.req.ValidateGenerate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
 func TestWriteEvent(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteEvent(&buf, Event{Type: "health", ID: "health-1", Status: "ok"})

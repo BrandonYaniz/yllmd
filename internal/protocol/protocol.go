@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 type MessageType string
@@ -108,6 +109,65 @@ func DecodeRequest(line []byte) (Request, error) {
 		return Request{}, fmt.Errorf("request id is required")
 	}
 	return req, nil
+}
+
+func (r Request) ValidateGenerate() error {
+	if r.Type != MessageGenerate {
+		return fmt.Errorf("request type must be generate")
+	}
+	if r.Input == nil {
+		return fmt.Errorf("generate request requires input")
+	}
+	switch r.Input.Kind {
+	case "prompt":
+		if strings.TrimSpace(r.Input.Prompt) == "" {
+			return fmt.Errorf("prompt input requires prompt")
+		}
+	case "messages":
+		if len(r.Input.Messages) == 0 {
+			return fmt.Errorf("messages input requires at least one message")
+		}
+		for i, message := range r.Input.Messages {
+			if !validRole(message.Role) {
+				return fmt.Errorf("messages[%d].role %q is not supported", i, message.Role)
+			}
+			if strings.TrimSpace(message.Content) == "" {
+				return fmt.Errorf("messages[%d].content is required", i)
+			}
+		}
+	default:
+		return fmt.Errorf("unsupported input kind %q", r.Input.Kind)
+	}
+	if r.Settings.Temperature != nil && *r.Settings.Temperature < 0 {
+		return fmt.Errorf("temperature must be greater than or equal to 0")
+	}
+	if r.Settings.TopP != nil && (*r.Settings.TopP <= 0 || *r.Settings.TopP > 1) {
+		return fmt.Errorf("top_p must be in the range (0, 1]")
+	}
+	if r.Settings.MaxTokens != nil && *r.Settings.MaxTokens <= 0 {
+		return fmt.Errorf("max_tokens must be positive")
+	}
+	for i, stop := range r.Settings.Stop {
+		if stop == "" {
+			return fmt.Errorf("stop[%d] must not be empty", i)
+		}
+	}
+	if r.Queue.Policy != "" && r.Queue.Policy != "wait" {
+		return fmt.Errorf("queue.policy %q is not supported", r.Queue.Policy)
+	}
+	if r.Queue.TimeoutMS < 0 {
+		return fmt.Errorf("queue.timeout_ms must not be negative")
+	}
+	return nil
+}
+
+func validRole(role string) bool {
+	switch role {
+	case "system", "user", "assistant":
+		return true
+	default:
+		return false
+	}
 }
 
 func WriteEvent(w io.Writer, event Event) error {
