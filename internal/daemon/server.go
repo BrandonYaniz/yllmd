@@ -189,6 +189,10 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 	if req.Activate != nil {
 		activate = *req.Activate
 	}
+	if activate && !s.isIdle() {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "daemon_busy", Message: "model activation requires an idle daemon"})
+		return
+	}
 	result, err := storage.NewModelStore(s.cfg).InstallLocalFile(storage.InstallRequest{
 		ModelName:  model.Name,
 		VersionID:  req.Version,
@@ -217,6 +221,10 @@ func (s *Server) rollbackModel(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
 		return
 	}
+	if !s.isIdle() {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "daemon_busy", Message: "model rollback requires an idle daemon"})
+		return
+	}
 	result, err := storage.NewModelStore(s.cfg).RollbackLatest(model.Name)
 	if err != nil {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "rollback_failed", Message: err.Error()})
@@ -236,6 +244,12 @@ func (s *Server) reloadProvider() {
 	if err := closeable.Close(ctx); err != nil {
 		s.logger.Debug("provider reload close failed", "error", err)
 	}
+}
+
+func (s *Server) isIdle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.active) == 0 && len(s.queued) == 0
 }
 
 func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {

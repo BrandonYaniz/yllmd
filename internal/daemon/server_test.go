@@ -141,6 +141,64 @@ func TestInstallModelWithoutActivationDoesNotReloadProvider(t *testing.T) {
 	}
 }
 
+func TestInstallModelActivationRequiresIdleDaemon(t *testing.T) {
+	cfg := modelTestConfig(t)
+	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
+	server := NewServer(cfg, &countingProvider{}, nil)
+	client := newMemoryClient()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.active["req-1"] = cancel
+
+	server.handleModels(client, protocol.Request{
+		Type:    protocol.MessageModels,
+		ID:      "models-1",
+		Action:  "install",
+		Model:   "fast",
+		Version: "v1",
+		File:    sourcePath,
+		SHA256:  checksum,
+	})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "error" || event.Code != "daemon_busy" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("install should not cancel active request")
+	}
+}
+
+func TestInstallModelWithoutActivationAllowedWhenBusy(t *testing.T) {
+	cfg := modelTestConfig(t)
+	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
+	server := NewServer(cfg, &countingProvider{}, nil)
+	client := newMemoryClient()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.active["req-1"] = cancel
+	activate := false
+
+	server.handleModels(client, protocol.Request{
+		Type:     protocol.MessageModels,
+		ID:       "models-1",
+		Action:   "install",
+		Model:    "fast",
+		Version:  "v1",
+		File:     sourcePath,
+		SHA256:   checksum,
+		Activate: &activate,
+	})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "installed" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("install should not cancel active request")
+	}
+}
+
 func TestInstallModelRejectsInvalidRequest(t *testing.T) {
 	server := NewServer(modelTestConfig(t), nil, nil)
 	client := newMemoryClient()
@@ -199,6 +257,33 @@ func TestRollbackModelRequiresHistory(t *testing.T) {
 	event := readMemoryEvent(t, client)
 	if event.Type != "error" || event.Code != "rollback_failed" {
 		t.Fatalf("unexpected event: %#v", event)
+	}
+}
+
+func TestRollbackModelRequiresIdleDaemon(t *testing.T) {
+	cfg := modelTestConfig(t)
+	firstPath, firstChecksum := writeDaemonSourceModel(t, []byte("first"))
+	secondPath, secondChecksum := writeDaemonSourceModel(t, []byte("second"))
+	server := NewServer(cfg, &countingProvider{}, nil)
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-1", Action: "install", Model: "fast", Version: "v1", File: firstPath, SHA256: firstChecksum})
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-2", Action: "install", Model: "fast", Version: "v2", File: secondPath, SHA256: secondChecksum})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.queued["req-1"] = &generateJob{ctx: ctx, cancel: cancel}
+	client := newMemoryClient()
+
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "rollback-1", Action: "rollback", Model: "fast"})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "error" || event.Code != "daemon_busy" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	active, err := os.ReadFile(filepath.Join(cfg.Paths.ModelDir, "fast", "current", "model.gguf"))
+	if err != nil {
+		t.Fatalf("read current model: %v", err)
+	}
+	if string(active) != "second" {
+		t.Fatalf("current model content = %q", active)
 	}
 }
 
