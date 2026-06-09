@@ -201,6 +201,9 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "install_failed", Message: err.Error()})
 		return
 	}
+	if activate {
+		s.reloadProvider()
+	}
 	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
 }
 
@@ -219,7 +222,20 @@ func (s *Server) rollbackModel(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "rollback_failed", Message: err.Error()})
 		return
 	}
+	s.reloadProvider()
 	_ = client.write(protocol.Event{Type: "rolled_back", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: storage.NewModelStore(s.cfg).CurrentModelPath(result.ModelName)})
+}
+
+func (s *Server) reloadProvider() {
+	closeable, ok := s.provider.(providers.Closeable)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := closeable.Close(ctx); err != nil {
+		s.logger.Debug("provider reload close failed", "error", err)
+	}
 }
 
 func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {

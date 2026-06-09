@@ -14,6 +14,7 @@ import (
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
+	"github.com/BrandonYaniz/yllmd/internal/providers"
 )
 
 func TestCancelMissingRequest(t *testing.T) {
@@ -83,7 +84,8 @@ func TestDaemonStatus(t *testing.T) {
 func TestInstallModel(t *testing.T) {
 	cfg := modelTestConfig(t)
 	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
-	server := NewServer(cfg, nil, nil)
+	provider := &countingProvider{}
+	server := NewServer(cfg, provider, nil)
 	client := newMemoryClient()
 
 	server.handleModels(client, protocol.Request{
@@ -105,6 +107,37 @@ func TestInstallModel(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.Paths.ModelDir, "fast", "current", "model.gguf")); err != nil {
 		t.Fatalf("expected activated model: %v", err)
+	}
+	if provider.closeCount != 1 {
+		t.Fatalf("provider close count = %d", provider.closeCount)
+	}
+}
+
+func TestInstallModelWithoutActivationDoesNotReloadProvider(t *testing.T) {
+	cfg := modelTestConfig(t)
+	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
+	provider := &countingProvider{}
+	server := NewServer(cfg, provider, nil)
+	client := newMemoryClient()
+	activate := false
+
+	server.handleModels(client, protocol.Request{
+		Type:     protocol.MessageModels,
+		ID:       "models-1",
+		Action:   "install",
+		Model:    "fast",
+		Version:  "v1",
+		File:     sourcePath,
+		SHA256:   checksum,
+		Activate: &activate,
+	})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "installed" {
+		t.Fatalf("event type = %q, message = %q", event.Type, event.Message)
+	}
+	if provider.closeCount != 0 {
+		t.Fatalf("provider close count = %d", provider.closeCount)
 	}
 }
 
@@ -129,7 +162,8 @@ func TestRollbackModel(t *testing.T) {
 	cfg := modelTestConfig(t)
 	firstPath, firstChecksum := writeDaemonSourceModel(t, []byte("first"))
 	secondPath, secondChecksum := writeDaemonSourceModel(t, []byte("second"))
-	server := NewServer(cfg, nil, nil)
+	provider := &countingProvider{}
+	server := NewServer(cfg, provider, nil)
 
 	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-1", Action: "install", Model: "fast", Version: "v1", File: firstPath, SHA256: firstChecksum})
 	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-2", Action: "install", Model: "fast", Version: "v2", File: secondPath, SHA256: secondChecksum})
@@ -150,6 +184,9 @@ func TestRollbackModel(t *testing.T) {
 	}
 	if string(data) != "first" {
 		t.Fatalf("current model content = %q", data)
+	}
+	if provider.closeCount != 3 {
+		t.Fatalf("provider close count = %d", provider.closeCount)
 	}
 }
 
@@ -261,4 +298,23 @@ func (a dummyAddr) Network() string {
 
 func (a dummyAddr) String() string {
 	return string(a)
+}
+
+type countingProvider struct {
+	closeCount int
+}
+
+func (p *countingProvider) ID() string {
+	return "local"
+}
+
+func (p *countingProvider) Generate(context.Context, providers.GenerateRequest) (<-chan protocol.Event, error) {
+	events := make(chan protocol.Event)
+	close(events)
+	return events, nil
+}
+
+func (p *countingProvider) Close(context.Context) error {
+	p.closeCount++
+	return nil
 }
