@@ -21,8 +21,13 @@ const (
 type Request struct {
 	Type     MessageType        `json:"type"`
 	ID       string             `json:"id"`
+	Action   string             `json:"action,omitempty"`
 	Provider string             `json:"provider,omitempty"`
 	Model    string             `json:"model,omitempty"`
+	Version  string             `json:"version,omitempty"`
+	File     string             `json:"file,omitempty"`
+	SHA256   string             `json:"sha256,omitempty"`
+	Activate *bool              `json:"activate,omitempty"`
 	Stream   *bool              `json:"stream,omitempty"`
 	Input    *Input             `json:"input,omitempty"`
 	Settings GenerationSettings `json:"settings,omitempty"`
@@ -58,6 +63,8 @@ type Event struct {
 	QueuePosition int               `json:"queue_position,omitempty"`
 	Provider      string            `json:"provider,omitempty"`
 	Model         string            `json:"model,omitempty"`
+	Version       string            `json:"version,omitempty"`
+	Path          string            `json:"path,omitempty"`
 	Models        []ModelDescriptor `json:"models,omitempty"`
 	Text          string            `json:"text,omitempty"`
 	FinishReason  string            `json:"finish_reason,omitempty"`
@@ -68,6 +75,28 @@ type Event struct {
 	Daemon        *DaemonStatus     `json:"daemon,omitempty"`
 	LoadedModel   string            `json:"loaded_model,omitempty"`
 	QueueDepth    int               `json:"queue_depth,omitempty"`
+}
+
+func (r Request) ValidateModelInstall() error {
+	if r.Type != MessageModels {
+		return fmt.Errorf("request type must be models")
+	}
+	if r.Action != "install" {
+		return fmt.Errorf("models request action must be install")
+	}
+	if strings.TrimSpace(r.Model) == "" {
+		return fmt.Errorf("model is required")
+	}
+	if strings.TrimSpace(r.Version) == "" {
+		return fmt.Errorf("version is required")
+	}
+	if strings.TrimSpace(r.File) == "" {
+		return fmt.Errorf("file is required")
+	}
+	if strings.TrimSpace(r.SHA256) == "" {
+		return fmt.Errorf("sha256 is required")
+	}
+	return nil
 }
 
 type Usage struct {

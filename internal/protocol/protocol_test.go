@@ -132,6 +132,28 @@ func TestValidateGenerateRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestValidateModelInstall(t *testing.T) {
+	req := Request{
+		Type:    MessageModels,
+		ID:      "models-1",
+		Action:  "install",
+		Model:   "fast",
+		Version: "v1",
+		File:    "/tmp/model.gguf",
+		SHA256:  "abc",
+	}
+	if err := req.ValidateModelInstall(); err != nil {
+		t.Fatalf("ValidateModelInstall returned error: %v", err)
+	}
+}
+
+func TestValidateModelInstallRejectsMissingFields(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "install", Model: "fast"}
+	if err := req.ValidateModelInstall(); err == nil {
+		t.Fatal("expected missing fields error")
+	}
+}
+
 func TestWriteEvent(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteEvent(&buf, Event{Type: "health", ID: "health-1", Status: "ok"})

@@ -56,11 +56,54 @@ func runSingle(socketPath string, messageType protocol.MessageType) {
 }
 
 func runModels(socketPath string, args []string) {
-	if len(args) != 1 || args[0] != "list" {
+	if len(args) == 1 && args[0] == "list" {
+		runSingle(socketPath, protocol.MessageModels)
+		return
+	}
+	if len(args) >= 1 && args[0] == "install" {
+		runModelsInstall(socketPath, args[1:])
+		return
+	}
+	usage()
+	os.Exit(2)
+}
+
+func runModelsInstall(socketPath string, args []string) {
+	installFlags := flag.NewFlagSet("models install", flag.ExitOnError)
+	file := installFlags.String("file", "", "local GGUF file to install")
+	version := installFlags.String("version", "", "model version id")
+	sha256 := installFlags.String("sha256", "", "expected SHA-256 checksum")
+	activate := installFlags.Bool("activate", true, "activate the installed version")
+	if err := installFlags.Parse(args); err != nil {
+		fatal(err)
+	}
+	remaining := installFlags.Args()
+	if len(remaining) != 1 {
 		usage()
 		os.Exit(2)
 	}
-	runSingle(socketPath, protocol.MessageModels)
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{
+		Type:     protocol.MessageModels,
+		ID:       requestID(protocol.MessageModels),
+		Action:   "install",
+		Model:    remaining[0],
+		Version:  *version,
+		File:     *file,
+		SHA256:   *sha256,
+		Activate: activate,
+	}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	printJSON(event)
 }
 
 func runCancel(socketPath string, args []string) {
@@ -157,7 +200,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|models list|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|models list|models install model -file path -version id -sha256 hash|cancel id|generate>\n")
 }
 
 func fatal(err error) {

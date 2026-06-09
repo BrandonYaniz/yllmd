@@ -17,6 +17,7 @@ import (
 	"github.com/BrandonYaniz/yllmd/internal/models"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
+	"github.com/BrandonYaniz/yllmd/internal/storage"
 )
 
 type Server struct {
@@ -155,10 +156,50 @@ func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 	case protocol.MessageProviders:
 		_ = client.write(protocol.Event{Type: "providers", ID: req.ID, Provider: "local"})
 	case protocol.MessageModels:
-		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.models.Descriptors()})
+		s.handleModels(client, req)
 	default:
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "unknown_request", Message: fmt.Sprintf("unsupported request type %q", req.Type)})
 	}
+}
+
+func (s *Server) handleModels(client *clientConn, req protocol.Request) {
+	switch req.Action {
+	case "", "list":
+		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.models.Descriptors()})
+	case "install":
+		s.installModel(client, req)
+	default:
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "unknown_models_action", Message: fmt.Sprintf("unsupported models action %q", req.Action)})
+	}
+}
+
+func (s *Server) installModel(client *clientConn, req protocol.Request) {
+	if err := req.ValidateModelInstall(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		return
+	}
+	model, err := s.models.Resolve(req.Model)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
+		return
+	}
+	activate := true
+	if req.Activate != nil {
+		activate = *req.Activate
+	}
+	result, err := storage.NewModelStore(s.cfg).InstallLocalFile(storage.InstallRequest{
+		ModelName:  model.Name,
+		VersionID:  req.Version,
+		SourcePath: req.File,
+		SHA256:     req.SHA256,
+		CatalogID:  model.Config.CatalogID,
+		Activate:   activate,
+	})
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "install_failed", Message: err.Error()})
+		return
+	}
+	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
 }
 
 func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
