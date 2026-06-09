@@ -181,3 +181,32 @@ func TestWriteModelsEvent(t *testing.T) {
 		t.Fatalf("unexpected model id: %#v", event.Models[0].ID)
 	}
 }
+
+func TestWriteStatusEvent(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteEvent(&buf, Event{
+		Type:   "status",
+		ID:     "status-1",
+		Status: "ok",
+		Daemon: &DaemonStatus{
+			Status:      "ok",
+			Provider:    "local",
+			LoadedModel: "fast",
+			QueueDepth:  1,
+			ModelCount:  3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteEvent returned error: %v", err)
+	}
+	var event Event
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
+		t.Fatalf("event is not JSON: %v", err)
+	}
+	if event.Daemon == nil {
+		t.Fatal("expected daemon status")
+	}
+	if event.Daemon.LoadedModel != "fast" || event.Daemon.ModelCount != 3 {
+		t.Fatalf("unexpected daemon status: %#v", event.Daemon)
+	}
+}

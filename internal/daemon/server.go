@@ -139,9 +139,11 @@ func (s *Server) handleConn(client *clientConn) {
 func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 	switch req.Type {
 	case protocol.MessageHealth:
-		_ = client.write(protocol.Event{Type: "health", ID: req.ID, Status: "ok", LoadedModel: s.loadedModel(), QueueDepth: s.queueDepth()})
+		status := s.daemonStatus()
+		_ = client.write(protocol.Event{Type: "health", ID: req.ID, Status: status.Status, Daemon: &status, LoadedModel: status.LoadedModel, QueueDepth: status.QueueDepth})
 	case protocol.MessageStatus:
-		_ = client.write(protocol.Event{Type: "status", ID: req.ID, Status: "ok", LoadedModel: s.loadedModel(), QueueDepth: s.queueDepth()})
+		status := s.daemonStatus()
+		_ = client.write(protocol.Event{Type: "status", ID: req.ID, Status: status.Status, Daemon: &status, LoadedModel: status.LoadedModel, QueueDepth: status.QueueDepth})
 	case protocol.MessageGenerate:
 		s.enqueueGenerate(client, req)
 	case protocol.MessageCancel:
@@ -316,6 +318,26 @@ func (s *Server) loadedModel() string {
 		return descriptors[0].Name
 	}
 	return ""
+}
+
+func (s *Server) daemonStatus() protocol.DaemonStatus {
+	return protocol.DaemonStatus{
+		Status:        "ok",
+		Provider:      s.cfg.Routing.DefaultProvider,
+		LoadedModel:   s.loadedModel(),
+		QueueDepth:    s.queueDepth(),
+		ModelCount:    len(s.models.Descriptors()),
+		RemoteEnabled: s.remoteEnabled(),
+	}
+}
+
+func (s *Server) remoteEnabled() bool {
+	for _, provider := range s.cfg.RemoteProviders {
+		if provider.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) requestTimeout(req protocol.Request) time.Duration {

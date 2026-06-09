@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
 )
@@ -43,6 +44,37 @@ func TestCancelActiveRequest(t *testing.T) {
 	}
 }
 
+func TestDaemonStatus(t *testing.T) {
+	cfg := testConfig()
+	cfg.Routing.DefaultProvider = "local"
+	cfg.ModelLifecycle.ResidentModel = "fast"
+	cfg.LocalModels = map[string]config.LocalModelConfig{
+		"fast": {
+			Tier:     "fast",
+			Resident: true,
+			Backend:  config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime:  config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+		},
+	}
+	server := NewServer(cfg, nil, nil)
+	status := server.daemonStatus()
+	if status.Status != "ok" {
+		t.Fatalf("status = %q", status.Status)
+	}
+	if status.Provider != "local" {
+		t.Fatalf("provider = %q", status.Provider)
+	}
+	if status.LoadedModel != "fast" {
+		t.Fatalf("loaded model = %q", status.LoadedModel)
+	}
+	if status.ModelCount != 1 {
+		t.Fatalf("model count = %d", status.ModelCount)
+	}
+}
+
 func testConfig() config.Config {
-	return config.Config{Queue: config.QueueConfig{MaxDepth: 1}}
+	return config.Config{
+		Queue:          config.QueueConfig{MaxDepth: 1},
+		ModelLifecycle: config.ModelLifecycleConfig{IdleCooldown: time.Minute},
+	}
 }

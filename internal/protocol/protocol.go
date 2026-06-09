@@ -65,6 +65,7 @@ type Event struct {
 	Code          string            `json:"code,omitempty"`
 	Message       string            `json:"message,omitempty"`
 	Status        string            `json:"status,omitempty"`
+	Daemon        *DaemonStatus     `json:"daemon,omitempty"`
 	LoadedModel   string            `json:"loaded_model,omitempty"`
 	QueueDepth    int               `json:"queue_depth,omitempty"`
 }
@@ -73,6 +74,15 @@ type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	TotalTokens  int `json:"total_tokens,omitempty"`
+}
+
+type DaemonStatus struct {
+	Status        string `json:"status"`
+	Provider      string `json:"provider"`
+	LoadedModel   string `json:"loaded_model"`
+	QueueDepth    int    `json:"queue_depth"`
+	ModelCount    int    `json:"model_count"`
+	RemoteEnabled bool   `json:"remote_enabled"`
 }
 
 type ModelDescriptor struct {
