@@ -125,6 +125,46 @@ func TestInstallModelRejectsInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestRollbackModel(t *testing.T) {
+	cfg := modelTestConfig(t)
+	firstPath, firstChecksum := writeDaemonSourceModel(t, []byte("first"))
+	secondPath, secondChecksum := writeDaemonSourceModel(t, []byte("second"))
+	server := NewServer(cfg, nil, nil)
+
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-1", Action: "install", Model: "fast", Version: "v1", File: firstPath, SHA256: firstChecksum})
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-2", Action: "install", Model: "fast", Version: "v2", File: secondPath, SHA256: secondChecksum})
+
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "rollback-1", Action: "rollback", Model: "fast"})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "rolled_back" {
+		t.Fatalf("event type = %q, message = %q", event.Type, event.Message)
+	}
+	if event.Version != "v1" {
+		t.Fatalf("rollback version = %q", event.Version)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.Paths.ModelDir, "fast", "current", "model.gguf"))
+	if err != nil {
+		t.Fatalf("read current model: %v", err)
+	}
+	if string(data) != "first" {
+		t.Fatalf("current model content = %q", data)
+	}
+}
+
+func TestRollbackModelRequiresHistory(t *testing.T) {
+	server := NewServer(modelTestConfig(t), nil, nil)
+	client := newMemoryClient()
+
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "rollback-1", Action: "rollback", Model: "fast"})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "error" || event.Code != "rollback_failed" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+}
+
 func testConfig() config.Config {
 	return config.Config{
 		Queue:          config.QueueConfig{MaxDepth: 1},

@@ -168,6 +168,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.models.Descriptors()})
 	case "install":
 		s.installModel(client, req)
+	case "rollback":
+		s.rollbackModel(client, req)
 	default:
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "unknown_models_action", Message: fmt.Sprintf("unsupported models action %q", req.Action)})
 	}
@@ -200,6 +202,24 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 		return
 	}
 	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
+}
+
+func (s *Server) rollbackModel(client *clientConn, req protocol.Request) {
+	if err := req.ValidateModelRollback(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		return
+	}
+	model, err := s.models.Resolve(req.Model)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
+		return
+	}
+	result, err := storage.NewModelStore(s.cfg).RollbackLatest(model.Name)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "rollback_failed", Message: err.Error()})
+		return
+	}
+	_ = client.write(protocol.Event{Type: "rolled_back", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: storage.NewModelStore(s.cfg).CurrentModelPath(result.ModelName)})
 }
 
 func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {

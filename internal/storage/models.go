@@ -15,9 +15,9 @@ import (
 )
 
 type Activation struct {
-	ModelName      string
-	VersionID      string
-	PreviousTarget string
+	ModelName      string `json:"model_name"`
+	VersionID      string `json:"version_id"`
+	PreviousTarget string `json:"previous_target"`
 }
 
 type InstallRequest struct {
@@ -35,6 +35,11 @@ type InstallResult struct {
 	ModelPath    string
 	ManifestPath string
 	Activation   *Activation
+}
+
+type RollbackResult struct {
+	ModelName string
+	VersionID string
 }
 
 type Manifest struct {
@@ -83,6 +88,10 @@ func (s ModelStore) VersionModelPath(modelName, versionID string) string {
 
 func (s ModelStore) ManifestPath(modelName, versionID string) string {
 	return filepath.Join(s.VersionDir(modelName, versionID), "manifest.json")
+}
+
+func (s ModelStore) RollbackPath(modelName string) string {
+	return filepath.Join(s.ModelDir(modelName), "rollback.json")
 }
 
 func (s ModelStore) EnsureLayout(modelName string) error {
@@ -199,7 +208,11 @@ func (s ModelStore) ActivateVersion(modelName, versionID string) (Activation, er
 		_ = os.Remove(tmp)
 		return Activation{}, err
 	}
-	return Activation{ModelName: cleanPathPart(modelName), VersionID: cleanPathPart(versionID), PreviousTarget: previous}, nil
+	activation := Activation{ModelName: cleanPathPart(modelName), VersionID: cleanPathPart(versionID), PreviousTarget: previous}
+	if err := writeJSON(s.RollbackPath(modelName), activation); err != nil {
+		return Activation{}, err
+	}
+	return activation, nil
 }
 
 func (s ModelStore) RollbackActivation(activation Activation) error {
@@ -217,6 +230,30 @@ func (s ModelStore) RollbackActivation(activation Activation) error {
 		return err
 	}
 	return nil
+}
+
+func (s ModelStore) RollbackLatest(modelName string) (RollbackResult, error) {
+	modelName = cleanPathPart(modelName)
+	data, err := os.ReadFile(s.RollbackPath(modelName))
+	if err != nil {
+		return RollbackResult{}, err
+	}
+	var activation Activation
+	if err := json.Unmarshal(data, &activation); err != nil {
+		return RollbackResult{}, err
+	}
+	if activation.ModelName != modelName {
+		return RollbackResult{}, fmt.Errorf("rollback record model %q does not match %q", activation.ModelName, modelName)
+	}
+	if err := s.RollbackActivation(activation); err != nil {
+		return RollbackResult{}, err
+	}
+	_ = os.Remove(s.RollbackPath(modelName))
+	versionID := ""
+	if activation.PreviousTarget != "" {
+		versionID = filepath.Base(filepath.Clean(activation.PreviousTarget))
+	}
+	return RollbackResult{ModelName: modelName, VersionID: versionID}, nil
 }
 
 func VerifySHA256(path, expectedHex string) error {
@@ -263,7 +300,11 @@ func copyFile(dst, src string) error {
 }
 
 func writeManifest(path string, manifest Manifest) error {
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	return writeJSON(path, manifest)
+}
+
+func writeJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}

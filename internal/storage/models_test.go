@@ -103,6 +103,46 @@ func TestRollbackActivation(t *testing.T) {
 	}
 }
 
+func TestRollbackLatest(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	writeVersion(t, store, "fast", "v1")
+	writeVersion(t, store, "fast", "v2")
+
+	if _, err := store.ActivateVersion("fast", "v1"); err != nil {
+		t.Fatalf("activate v1: %v", err)
+	}
+	if _, err := store.ActivateVersion("fast", "v2"); err != nil {
+		t.Fatalf("activate v2: %v", err)
+	}
+	if _, err := os.Stat(store.RollbackPath("fast")); err != nil {
+		t.Fatalf("expected rollback record: %v", err)
+	}
+	result, err := store.RollbackLatest("fast")
+	if err != nil {
+		t.Fatalf("RollbackLatest returned error: %v", err)
+	}
+	if result.VersionID != "v1" {
+		t.Fatalf("rollback version = %q", result.VersionID)
+	}
+	active, err := store.ActiveVersion("fast")
+	if err != nil {
+		t.Fatalf("ActiveVersion returned error: %v", err)
+	}
+	if active != "v1" {
+		t.Fatalf("active version = %q", active)
+	}
+	if _, err := os.Stat(store.RollbackPath("fast")); !os.IsNotExist(err) {
+		t.Fatalf("expected rollback record to be removed, err=%v", err)
+	}
+}
+
+func TestRollbackLatestRequiresRecord(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	if _, err := store.RollbackLatest("fast"); err == nil {
+		t.Fatal("expected missing rollback record error")
+	}
+}
+
 func TestActivateVersionRequiresModelFile(t *testing.T) {
 	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
 	if err := os.MkdirAll(store.VersionDir("fast", "v1"), 0o755); err != nil {
