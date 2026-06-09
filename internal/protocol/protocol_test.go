@@ -42,3 +42,38 @@ func TestWriteEvent(t *testing.T) {
 		t.Fatalf("unexpected event: %#v", event)
 	}
 }
+
+func TestWriteModelsEvent(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteEvent(&buf, Event{
+		Type: "models",
+		ID:   "models-1",
+		Models: []ModelDescriptor{
+			{
+				ID:          ModelID{Provider: "local", Name: "fast"},
+				Name:        "fast",
+				DisplayName: "fast",
+				Tier:        "fast",
+				Resident:    true,
+				Capabilities: ModelCapabilities{
+					SupportsStreaming:        true,
+					SupportsLocalPreparation: true,
+					ContextWindow:            1024,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteEvent returned error: %v", err)
+	}
+	var event Event
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
+		t.Fatalf("event is not JSON: %v", err)
+	}
+	if len(event.Models) != 1 {
+		t.Fatalf("model count = %d", len(event.Models))
+	}
+	if event.Models[0].ID.Provider != "local" || event.Models[0].ID.Name != "fast" {
+		t.Fatalf("unexpected model id: %#v", event.Models[0].ID)
+	}
+}

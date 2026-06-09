@@ -52,25 +52,48 @@ type QueueOptions struct {
 }
 
 type Event struct {
-	Type          string `json:"type"`
-	ID            string `json:"id,omitempty"`
-	QueuePosition int    `json:"queue_position,omitempty"`
-	Provider      string `json:"provider,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Text          string `json:"text,omitempty"`
-	FinishReason  string `json:"finish_reason,omitempty"`
-	Usage         *Usage `json:"usage,omitempty"`
-	Code          string `json:"code,omitempty"`
-	Message       string `json:"message,omitempty"`
-	Status        string `json:"status,omitempty"`
-	LoadedModel   string `json:"loaded_model,omitempty"`
-	QueueDepth    int    `json:"queue_depth,omitempty"`
+	Type          string            `json:"type"`
+	ID            string            `json:"id,omitempty"`
+	QueuePosition int               `json:"queue_position,omitempty"`
+	Provider      string            `json:"provider,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	Models        []ModelDescriptor `json:"models,omitempty"`
+	Text          string            `json:"text,omitempty"`
+	FinishReason  string            `json:"finish_reason,omitempty"`
+	Usage         *Usage            `json:"usage,omitempty"`
+	Code          string            `json:"code,omitempty"`
+	Message       string            `json:"message,omitempty"`
+	Status        string            `json:"status,omitempty"`
+	LoadedModel   string            `json:"loaded_model,omitempty"`
+	QueueDepth    int               `json:"queue_depth,omitempty"`
 }
 
 type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	TotalTokens  int `json:"total_tokens,omitempty"`
+}
+
+type ModelDescriptor struct {
+	ID               ModelID           `json:"id"`
+	Name             string            `json:"name"`
+	DisplayName      string            `json:"display_name"`
+	Tier             string            `json:"tier"`
+	Resident         bool              `json:"resident"`
+	Capabilities     ModelCapabilities `json:"capabilities"`
+	ProviderMetadata map[string]string `json:"provider_metadata,omitempty"`
+}
+
+type ModelID struct {
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+}
+
+type ModelCapabilities struct {
+	SupportsStreaming        bool `json:"supports_streaming"`
+	SupportsLocalPreparation bool `json:"supports_local_preparation"`
+	ContextWindow            int  `json:"context_window,omitempty"`
+	MaxOutputTokens          int  `json:"max_output_tokens,omitempty"`
 }
 
 func DecodeRequest(line []byte) (Request, error) {

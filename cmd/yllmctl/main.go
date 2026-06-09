@@ -26,6 +26,8 @@ func main() {
 		runSingle(*socketPath, protocol.MessageHealth)
 	case "status":
 		runSingle(*socketPath, protocol.MessageStatus)
+	case "models":
+		runModels(*socketPath, args[1:])
 	case "generate":
 		runGenerate(*socketPath, args[1:])
 	default:
@@ -49,6 +51,14 @@ func runSingle(socketPath string, messageType protocol.MessageType) {
 		fatal(err)
 	}
 	printJSON(event)
+}
+
+func runModels(socketPath string, args []string) {
+	if len(args) != 1 || args[0] != "list" {
+		usage()
+		os.Exit(2)
+	}
+	runSingle(socketPath, protocol.MessageModels)
 }
 
 func runGenerate(socketPath string, args []string) {
@@ -125,7 +135,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|models list|generate>\n")
 }
 
 func fatal(err error) {

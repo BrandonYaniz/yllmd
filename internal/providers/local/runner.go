@@ -9,12 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
+	"github.com/BrandonYaniz/yllmd/internal/models"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
 )
@@ -22,8 +22,9 @@ import (
 const runnerProtocolVersion = 1
 
 type RunnerProvider struct {
-	cfg    config.Config
-	logger *slog.Logger
+	cfg      config.Config
+	registry models.Registry
+	logger   *slog.Logger
 }
 
 type runnerEvent struct {
@@ -73,7 +74,7 @@ func NewRunnerProvider(cfg config.Config, logger *slog.Logger) *RunnerProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &RunnerProvider{cfg: cfg, logger: logger}
+	return &RunnerProvider{cfg: cfg, registry: models.NewRegistry(cfg), logger: logger}
 }
 
 func (p *RunnerProvider) ID() string {
@@ -81,22 +82,22 @@ func (p *RunnerProvider) ID() string {
 }
 
 func (p *RunnerProvider) Generate(ctx context.Context, request providers.GenerateRequest) (<-chan protocol.Event, error) {
-	modelName, model, err := p.modelFor(request.Model)
+	model, err := p.registry.Resolve(request.Model)
 	if err != nil {
 		return nil, err
 	}
 	events := make(chan protocol.Event)
 	go func() {
 		defer close(events)
-		if err := p.run(ctx, modelName, model, request, events); err != nil {
+		if err := p.run(ctx, model, request, events); err != nil {
 			sendProviderError(ctx, events, request.ID, err)
 		}
 	}()
 	return events, nil
 }
 
-func (p *RunnerProvider) run(ctx context.Context, modelName string, model config.LocalModelConfig, request providers.GenerateRequest, events chan<- protocol.Event) error {
-	cmd := exec.Command(model.Backend.Command)
+func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, request providers.GenerateRequest, events chan<- protocol.Event) error {
+	cmd := exec.Command(model.Config.Backend.Command)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("open runner stdin: %w", err)
@@ -115,7 +116,7 @@ func (p *RunnerProvider) run(ctx context.Context, modelName string, model config
 
 	var stdinMu sync.Mutex
 	lines := readRunnerLines(stdout)
-	go p.logRunnerStderr(stderr, modelName)
+	go p.logRunnerStderr(stderr, model.Name)
 
 	done := make(chan error, 1)
 	go func() {
@@ -153,9 +154,9 @@ func (p *RunnerProvider) run(ctx context.Context, modelName string, model config
 	if err := writeRunnerCommand(&stdinMu, stdin, runnerConfigureCommand{
 		Type:          "configure",
 		ID:            "configure-" + request.ID,
-		ModelPath:     modelPath(p.cfg, modelName, model),
-		ContextTokens: model.Runtime.ContextTokens,
-		Threads:       model.Runtime.Threads,
+		ModelPath:     model.ModelPath,
+		ContextTokens: model.Config.Runtime.ContextTokens,
+		Threads:       model.Config.Runtime.Threads,
 	}); err != nil {
 		return fmt.Errorf("send runner configure: %w", err)
 	}
@@ -185,7 +186,7 @@ func (p *RunnerProvider) run(ctx context.Context, modelName string, model config
 		}
 		switch event.Type {
 		case "started":
-			if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: modelName}) {
+			if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: model.Name}) {
 				return nil
 			}
 		case "delta":
@@ -205,29 +206,6 @@ func (p *RunnerProvider) run(ctx context.Context, modelName string, model config
 			p.logger.Debug("ignoring unknown runner event", "type", event.Type)
 		}
 	}
-}
-
-func (p *RunnerProvider) modelFor(name string) (string, config.LocalModelConfig, error) {
-	if name == "" {
-		name = p.cfg.ModelLifecycle.ResidentModel
-	}
-	model, ok := p.cfg.LocalModels[name]
-	if ok {
-		return name, model, nil
-	}
-	for configuredName, candidate := range p.cfg.LocalModels {
-		if candidate.Tier == name {
-			return configuredName, candidate, nil
-		}
-	}
-	return "", config.LocalModelConfig{}, fmt.Errorf("local model %q is not configured", name)
-}
-
-func modelPath(cfg config.Config, modelName string, model config.LocalModelConfig) string {
-	if model.ModelPath != "" {
-		return model.ModelPath
-	}
-	return filepath.Join(cfg.Paths.ModelDir, modelName, "current", "model.gguf")
 }
 
 func readRunnerLines(stdout io.Reader) <-chan lineResult {

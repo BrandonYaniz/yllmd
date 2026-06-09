@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
+	"github.com/BrandonYaniz/yllmd/internal/models"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
 )
 
 type Server struct {
 	cfg      config.Config
+	models   models.Registry
 	provider providers.Provider
 	logger   *slog.Logger
 
@@ -51,6 +53,7 @@ func NewServer(cfg config.Config, provider providers.Provider, logger *slog.Logg
 	}
 	return &Server{
 		cfg:      cfg,
+		models:   models.NewRegistry(cfg),
 		provider: provider,
 		logger:   logger,
 		jobs:     make(chan *generateJob, cfg.Queue.MaxDepth),
@@ -140,7 +143,7 @@ func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 	case protocol.MessageProviders:
 		_ = client.write(protocol.Event{Type: "providers", ID: req.ID, Provider: "local"})
 	case protocol.MessageModels:
-		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Model: s.loadedModel()})
+		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.models.Descriptors()})
 	default:
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "unknown_request", Message: fmt.Sprintf("unsupported request type %q", req.Type)})
 	}
@@ -160,6 +163,10 @@ func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
 	}
 	if req.Model == "" {
 		req.Model = s.cfg.ModelLifecycle.ResidentModel
+	}
+	if _, err := s.models.Resolve(req.Model); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
+		return
 	}
 	timeout := s.requestTimeout(req)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -289,11 +296,12 @@ func (s *Server) queueDepth() int {
 }
 
 func (s *Server) loadedModel() string {
-	if s.cfg.ModelLifecycle.ResidentModel != "" {
-		return s.cfg.ModelLifecycle.ResidentModel
+	if model, err := s.models.Resident(); err == nil {
+		return model.Name
 	}
-	for name := range s.cfg.LocalModels {
-		return name
+	descriptors := s.models.Descriptors()
+	if len(descriptors) > 0 {
+		return descriptors[0].Name
 	}
 	return ""
 }
