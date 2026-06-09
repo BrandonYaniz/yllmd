@@ -202,6 +202,21 @@ func TestRollbackModelRequiresHistory(t *testing.T) {
 	}
 }
 
+func TestModelDescriptorsIncludeActiveVersion(t *testing.T) {
+	cfg := modelTestConfig(t)
+	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
+	server := NewServer(cfg, nil, nil)
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-1", Action: "install", Model: "fast", Version: "v1", File: sourcePath, SHA256: checksum})
+
+	descriptors := server.modelDescriptors()
+	if len(descriptors) != 1 {
+		t.Fatalf("descriptor count = %d", len(descriptors))
+	}
+	if descriptors[0].ProviderMetadata["active_version"] != "v1" {
+		t.Fatalf("active version = %q", descriptors[0].ProviderMetadata["active_version"])
+	}
+}
+
 func testConfig() config.Config {
 	return config.Config{
 		Queue:          config.QueueConfig{MaxDepth: 1},

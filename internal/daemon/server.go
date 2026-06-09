@@ -165,7 +165,7 @@ func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 	switch req.Action {
 	case "", "list":
-		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.models.Descriptors()})
+		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors()})
 	case "install":
 		s.installModel(client, req)
 	case "rollback":
@@ -406,6 +406,22 @@ func (s *Server) daemonStatus() protocol.DaemonStatus {
 		ModelCount:    len(s.models.Descriptors()),
 		RemoteEnabled: s.remoteEnabled(),
 	}
+}
+
+func (s *Server) modelDescriptors() []protocol.ModelDescriptor {
+	descriptors := s.models.Descriptors()
+	store := storage.NewModelStore(s.cfg)
+	for i := range descriptors {
+		activeVersion, err := store.ActiveVersion(descriptors[i].Name)
+		if err != nil {
+			continue
+		}
+		if descriptors[i].ProviderMetadata == nil {
+			descriptors[i].ProviderMetadata = make(map[string]string)
+		}
+		descriptors[i].ProviderMetadata["active_version"] = activeVersion
+	}
+	return descriptors
 }
 
 func (s *Server) remoteEnabled() bool {
