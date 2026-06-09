@@ -12,6 +12,12 @@ import (
 	"github.com/BrandonYaniz/yllmd/internal/config"
 )
 
+type Activation struct {
+	ModelName      string
+	VersionID      string
+	PreviousTarget string
+}
+
 type ModelStore struct {
 	root string
 }
@@ -50,6 +56,62 @@ func (s ModelStore) VersionModelPath(modelName, versionID string) string {
 
 func (s ModelStore) EnsureLayout(modelName string) error {
 	return os.MkdirAll(filepath.Join(s.ModelDir(modelName), "versions"), 0o755)
+}
+
+func (s ModelStore) ActiveVersion(modelName string) (string, error) {
+	target, err := os.Readlink(s.CurrentDir(modelName))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Base(filepath.Clean(target)), nil
+}
+
+func (s ModelStore) ActivateVersion(modelName, versionID string) (Activation, error) {
+	versionDir := s.VersionDir(modelName, versionID)
+	if info, err := os.Stat(versionDir); err != nil {
+		return Activation{}, err
+	} else if !info.IsDir() {
+		return Activation{}, fmt.Errorf("version path is not a directory: %s", versionDir)
+	}
+	if _, err := os.Stat(filepath.Join(versionDir, "model.gguf")); err != nil {
+		return Activation{}, fmt.Errorf("version is missing model.gguf: %w", err)
+	}
+	if err := os.MkdirAll(s.ModelDir(modelName), 0o755); err != nil {
+		return Activation{}, err
+	}
+
+	current := s.CurrentDir(modelName)
+	previous, err := os.Readlink(current)
+	if err != nil && !os.IsNotExist(err) {
+		return Activation{}, err
+	}
+	tmp := current + ".next"
+	_ = os.Remove(tmp)
+	if err := os.Symlink(filepath.Join("versions", cleanPathPart(versionID)), tmp); err != nil {
+		return Activation{}, err
+	}
+	if err := os.Rename(tmp, current); err != nil {
+		_ = os.Remove(tmp)
+		return Activation{}, err
+	}
+	return Activation{ModelName: cleanPathPart(modelName), VersionID: cleanPathPart(versionID), PreviousTarget: previous}, nil
+}
+
+func (s ModelStore) RollbackActivation(activation Activation) error {
+	if activation.PreviousTarget == "" {
+		return os.Remove(s.CurrentDir(activation.ModelName))
+	}
+	current := s.CurrentDir(activation.ModelName)
+	tmp := current + ".rollback"
+	_ = os.Remove(tmp)
+	if err := os.Symlink(activation.PreviousTarget, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, current); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func VerifySHA256(path, expectedHex string) error {
