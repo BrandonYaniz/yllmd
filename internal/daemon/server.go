@@ -145,8 +145,11 @@ func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 	case protocol.MessageGenerate:
 		s.enqueueGenerate(client, req)
 	case protocol.MessageCancel:
-		s.cancel(req.ID)
-		_ = client.write(protocol.Event{Type: "cancelled", ID: req.ID})
+		if s.cancel(req.ID) {
+			_ = client.write(protocol.Event{Type: "cancelled", ID: req.ID})
+		} else {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "request_not_active", Message: "no queued or active request matched the id"})
+		}
 	case protocol.MessageProviders:
 		_ = client.write(protocol.Event{Type: "providers", ID: req.ID, Provider: "local"})
 	case protocol.MessageModels:
@@ -265,17 +268,19 @@ func (s *Server) runJob(job *generateJob) {
 	}
 }
 
-func (s *Server) cancel(id string) {
+func (s *Server) cancel(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cancel, ok := s.active[id]; ok {
 		cancel()
-		return
+		return true
 	}
 	if job, ok := s.queued[id]; ok {
 		job.cancel()
 		delete(s.queued, id)
+		return true
 	}
+	return false
 }
 
 func (s *Server) setActive(id string, cancel context.CancelFunc) {

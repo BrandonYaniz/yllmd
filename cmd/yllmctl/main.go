@@ -28,6 +28,8 @@ func main() {
 		runSingle(*socketPath, protocol.MessageStatus)
 	case "models":
 		runModels(*socketPath, args[1:])
+	case "cancel":
+		runCancel(*socketPath, args[1:])
 	case "generate":
 		runGenerate(*socketPath, args[1:])
 	default:
@@ -59,6 +61,26 @@ func runModels(socketPath string, args []string) {
 		os.Exit(2)
 	}
 	runSingle(socketPath, protocol.MessageModels)
+}
+
+func runCancel(socketPath string, args []string) {
+	if len(args) != 1 {
+		usage()
+		os.Exit(2)
+	}
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{Type: protocol.MessageCancel, ID: args[0]}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	printJSON(event)
 }
 
 func runGenerate(socketPath string, args []string) {
@@ -135,7 +157,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|models list|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|models list|cancel id|generate>\n")
 }
 
 func fatal(err error) {
