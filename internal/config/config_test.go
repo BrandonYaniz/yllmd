@@ -28,10 +28,7 @@ func TestLoadExampleConfig(t *testing.T) {
 
 func TestRejectsRemoteDefaultProviderForV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
-	if err != nil {
-		t.Fatalf("read example config: %v", err)
-	}
+	data := readExampleConfig(t)
 	data = []byte(strings.ReplaceAll(string(data), "default_provider: local", "default_provider: openai"))
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -39,4 +36,37 @@ func TestRejectsRemoteDefaultProviderForV1(t *testing.T) {
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected remote default provider to be rejected")
 	}
+}
+
+func TestRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := readExampleConfig(t)
+	data = []byte(strings.Replace(string(data), "transport: stdio", "transport: stdio\n      url: http://127.0.0.1:8080", 1))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected unknown backend field to be rejected")
+	}
+}
+
+func TestRejectsUnsupportedUpdatePolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := readExampleConfig(t)
+	data = []byte(strings.ReplaceAll(string(data), "default_policy: notify", "default_policy: sometimes"))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected unsupported update policy to be rejected")
+	}
+}
+
+func readExampleConfig(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("read example config: %v", err)
+	}
+	return data
 }

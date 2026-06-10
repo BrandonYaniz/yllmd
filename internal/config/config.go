@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -91,7 +92,9 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -121,6 +124,11 @@ func (c Config) Validate() error {
 	}
 	if c.ModelLifecycle.MaxLoadedModels <= 0 {
 		errs = append(errs, errors.New("model_lifecycle.max_loaded_models must be positive"))
+	}
+	if c.Updates.DefaultPolicy == "" {
+		errs = append(errs, errors.New("updates.default_policy is required"))
+	} else if !supportedUpdatePolicy(c.Updates.DefaultPolicy) {
+		errs = append(errs, fmt.Errorf("updates.default_policy %q is not supported", c.Updates.DefaultPolicy))
 	}
 	if len(c.LocalModels) == 0 {
 		errs = append(errs, errors.New("at least one local model is required for v1"))
@@ -162,6 +170,15 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("v1 requires routing.default_provider to be local"))
 	}
 	return errors.Join(errs...)
+}
+
+func supportedUpdatePolicy(policy string) bool {
+	switch policy {
+	case "manual", "notify", "download", "auto":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *QueueConfig) UnmarshalYAML(value *yaml.Node) error {
