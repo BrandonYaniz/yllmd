@@ -1,0 +1,34 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - "*-Release"
+
+jobs:
+  artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate release tag
+        run: ./scripts/validate-version.sh "${GITHUB_REF_NAME}" release
+
+      - name: Build release artifacts
+        run: make release-check VERSION="${GITHUB_REF_NAME}"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yllmd-${{ github.ref_name }}
+          path: |
+            dist/yllmd_${{ github.ref_name }}_*.tar.gz
+            dist/checksums_${{ github.ref_name }}.txt
+          if-no-files-found: error

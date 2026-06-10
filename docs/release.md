@@ -79,7 +79,9 @@ git push origin main
 git push origin 26.06.09.01-Release
 ```
 
-5. Attach `dist/*.tar.gz` and the matching `dist/checksums_<version>.txt` file to the release.
+5. The `Release Artifacts` GitHub Actions workflow runs on `*-Release` tags, validates the tag format, runs `make release-check`, and uploads the tarballs plus checksum file as workflow artifacts.
+
+6. Attach `dist/*.tar.gz` and the matching `dist/checksums_<version>.txt` file to the release.
 
 For development or beta artifacts, omit `-Release`:
 
