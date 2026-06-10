@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.yanizio.yllmd</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/sbin/yllmd</string>
+		<string>-config</string>
+		<string>/usr/local/etc/yllmd/config.yaml</string>
+	</array>
+
+	<key>UserName</key>
+	<string>yllmd</string>
+
+	<key>GroupName</key>
+	<string>yllm</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>/var/log/yllmd/yllmd.out.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>/var/log/yllmd/yllmd.err.log</string>
+
+	<key>WorkingDirectory</key>
+	<string>/var/lib/yllmd</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

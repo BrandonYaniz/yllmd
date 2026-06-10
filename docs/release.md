@@ -52,6 +52,16 @@ The release check builds tarballs for:
 - `freebsd_amd64`
 - `freebsd_arm64`
 
+Each tarball includes:
+
+- `yllmd`
+- `yllmctl`
+- `README.md`
+- `LICENSE`
+- `config.example.yaml`
+- `docs/`
+- `packaging/`
+
 ## Tagging
 
 1. Confirm `README.md`, `docs/protocol.md`, and `docs/configuration.md` describe the implemented release surface.

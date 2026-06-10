@@ -14,6 +14,8 @@ mode: 0660
 
 Applications that need access should run as users in the `yllm` group.
 
+See `docs/installation.md` for tarball installation and service templates for systemd, rc.d, and launchd.
+
 ## Model updates
 
 Model files are never replaced in place.
@@ -27,6 +29,14 @@ A safe update flow is:
 5. Activate by switching the model's `current` pointer.
 6. Reload during an idle window.
 7. Roll back if loading fails.
+
+Installed versions include:
+
+```text
+model.gguf
+manifest.json
+checksum.sha256
+```
 
 ## Update policies
 
