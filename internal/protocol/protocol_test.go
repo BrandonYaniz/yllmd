@@ -168,6 +168,20 @@ func TestValidateModelRollbackRejectsMissingModel(t *testing.T) {
 	}
 }
 
+func TestValidateModelActivate(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "activate", Model: "fast", Version: "v1"}
+	if err := req.ValidateModelActivate(); err != nil {
+		t.Fatalf("ValidateModelActivate returned error: %v", err)
+	}
+}
+
+func TestValidateModelActivateRejectsMissingFields(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "activate", Model: "fast"}
+	if err := req.ValidateModelActivate(); err == nil {
+		t.Fatal("expected missing version error")
+	}
+}
+
 func TestWriteEvent(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteEvent(&buf, Event{Type: "health", ID: "health-1", Status: "ok"})

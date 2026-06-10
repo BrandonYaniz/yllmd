@@ -173,6 +173,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors()})
 	case "install":
 		s.installModel(client, req)
+	case "activate":
+		s.activateModel(client, req)
 	case "rollback":
 		s.rollbackModel(client, req)
 	default:
@@ -214,6 +216,35 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 		s.reloadProvider()
 	}
 	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
+}
+
+func (s *Server) activateModel(client *clientConn, req protocol.Request) {
+	if err := req.ValidateModelActivate(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		return
+	}
+	model, err := s.models.Resolve(req.Model)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
+		return
+	}
+	if !s.isIdle() {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "daemon_busy", Message: "model activation requires an idle daemon"})
+		return
+	}
+	activation, err := storage.NewModelStore(s.cfg).ActivateVersion(model.Name, req.Version)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "activate_failed", Message: err.Error()})
+		return
+	}
+	s.reloadProvider()
+	_ = client.write(protocol.Event{
+		Type:    "activated",
+		ID:      req.ID,
+		Model:   activation.ModelName,
+		Version: activation.VersionID,
+		Path:    storage.NewModelStore(s.cfg).CurrentModelPath(activation.ModelName),
+	})
 }
 
 func (s *Server) rollbackModel(client *clientConn, req protocol.Request) {

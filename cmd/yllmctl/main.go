@@ -73,6 +73,10 @@ func runModels(socketPath string, args []string) {
 		runModelsInstall(socketPath, args[1:])
 		return
 	}
+	if len(args) >= 1 && args[0] == "activate" {
+		runModelsActivate(socketPath, args[1:])
+		return
+	}
 	if len(args) >= 1 && args[0] == "rollback" {
 		runModelsRollback(socketPath, args[1:])
 		return
@@ -113,6 +117,42 @@ func runModelsInstall(socketPath string, args []string) {
 		File:     *file,
 		SHA256:   *sha256,
 		Activate: activate,
+	}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	printJSON(event)
+}
+
+func runModelsActivate(socketPath string, args []string) {
+	if len(args) == 0 {
+		usage()
+		os.Exit(2)
+	}
+	model := args[0]
+	activateFlags := flag.NewFlagSet("models activate", flag.ExitOnError)
+	version := activateFlags.String("version", "", "model version id")
+	if err := activateFlags.Parse(args[1:]); err != nil {
+		fatal(err)
+	}
+	if len(activateFlags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{
+		Type:    protocol.MessageModels,
+		ID:      requestID(protocol.MessageModels),
+		Action:  "activate",
+		Model:   model,
+		Version: *version,
 	}); err != nil {
 		fatal(err)
 	}
@@ -242,7 +282,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|providers|models list|models install model -file path -version id -sha256 hash|models rollback model|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|providers|models list|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
 }
 
 func fatal(err error) {

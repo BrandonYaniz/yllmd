@@ -82,3 +82,12 @@ The protocol reserves these provider names for future releases:
 - `openai`
 - `gemini`
 - `anthropic`
+
+## Model actions
+
+The `models` request supports:
+
+- `list`, list configured models.
+- `install`, install a local GGUF file as a version.
+- `activate`, switch `current` to an installed version while the daemon is idle.
+- `rollback`, restore the previous activation while the daemon is idle.

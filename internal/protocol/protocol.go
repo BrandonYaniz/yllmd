@@ -112,6 +112,22 @@ func (r Request) ValidateModelRollback() error {
 	return nil
 }
 
+func (r Request) ValidateModelActivate() error {
+	if r.Type != MessageModels {
+		return fmt.Errorf("request type must be models")
+	}
+	if r.Action != "activate" {
+		return fmt.Errorf("models request action must be activate")
+	}
+	if strings.TrimSpace(r.Model) == "" {
+		return fmt.Errorf("model is required")
+	}
+	if strings.TrimSpace(r.Version) == "" {
+		return fmt.Errorf("version is required")
+	}
+	return nil
+}
+
 type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`

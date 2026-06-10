@@ -30,6 +30,8 @@ A safe update flow is:
 6. Reload during an idle window.
 7. Roll back if loading fails.
 
+Use `yllmctl models activate <model> -version <id>` to switch to an already installed version without reinstalling the model file. Activation requires the daemon to be idle.
+
 Installed versions include:
 
 ```text
