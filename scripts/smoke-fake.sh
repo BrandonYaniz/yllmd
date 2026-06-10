@@ -2,7 +2,11 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-TMP_DIR=$(mktemp -d "/private/tmp/yllmd-smoke.XXXXXX")
+TMP_BASE=/tmp
+if [ -d /private/tmp ]; then
+	TMP_BASE=/private/tmp
+fi
+TMP_DIR=$(mktemp -d "$TMP_BASE/yllmd-smoke.XXXXXX")
 SOCKET_PATH="$TMP_DIR/yllmd.sock"
 CONFIG_PATH="$TMP_DIR/config.yaml"
 DAEMON_LOG="$TMP_DIR/yllmd.log"

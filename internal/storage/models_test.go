@@ -21,6 +21,9 @@ func TestModelStorePaths(t *testing.T) {
 	if got := store.VersionModelPath("fast", "v1"); got != filepath.Join(root, "fast", "versions", "v1", "model.gguf") {
 		t.Fatalf("version model path = %q", got)
 	}
+	if got := store.ChecksumPath("fast", "v1"); got != filepath.Join(root, "fast", "versions", "v1", "checksum.sha256") {
+		t.Fatalf("checksum path = %q", got)
+	}
 }
 
 func TestEnsureLayout(t *testing.T) {
@@ -174,6 +177,9 @@ func TestInstallLocalFileActivatesVersion(t *testing.T) {
 	if result.ModelPath != store.VersionModelPath("fast", "v1") {
 		t.Fatalf("model path = %q", result.ModelPath)
 	}
+	if result.ChecksumPath != store.ChecksumPath("fast", "v1") {
+		t.Fatalf("checksum path = %q", result.ChecksumPath)
+	}
 	data, err := os.ReadFile(store.CurrentModelPath("fast"))
 	if err != nil {
 		t.Fatalf("read current model: %v", err)
@@ -191,6 +197,13 @@ func TestInstallLocalFileActivatesVersion(t *testing.T) {
 	}
 	if manifest.ModelName != "fast" || manifest.VersionID != "v1" || manifest.SHA256 != checksum {
 		t.Fatalf("unexpected manifest: %#v", manifest)
+	}
+	checksumData, err := os.ReadFile(result.ChecksumPath)
+	if err != nil {
+		t.Fatalf("read checksum: %v", err)
+	}
+	if string(checksumData) != checksum+"  model.gguf\n" {
+		t.Fatalf("checksum file = %q", checksumData)
 	}
 }
 

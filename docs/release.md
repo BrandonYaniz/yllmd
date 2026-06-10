@@ -43,6 +43,15 @@ Run these before tagging:
 make release-check VERSION=26.06.09.01-Release
 ```
 
+The release check builds tarballs for:
+
+- `darwin_amd64`
+- `darwin_arm64`
+- `linux_amd64`
+- `linux_arm64`
+- `freebsd_amd64`
+- `freebsd_arm64`
+
 ## Tagging
 
 1. Confirm `README.md`, `docs/protocol.md`, and `docs/configuration.md` describe the implemented release surface.

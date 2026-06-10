@@ -31,19 +31,39 @@ build:
 
 dist: check-version
 	mkdir -p "$(DIST_DIR)"
-	rm -rf "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64" "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64"
-	rm -f "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64.tar.gz" "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64.tar.gz" "$(DIST_DIR)/checksums_$(VERSION).txt"
+	rm -rf "$(DIST_DIR)/yllmd_$(VERSION)_darwin_amd64" "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64" "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64" "$(DIST_DIR)/yllmd_$(VERSION)_linux_arm64" "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_amd64" "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_arm64"
+	rm -f "$(DIST_DIR)/yllmd_$(VERSION)_darwin_amd64.tar.gz" "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64.tar.gz" "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64.tar.gz" "$(DIST_DIR)/yllmd_$(VERSION)_linux_arm64.tar.gz" "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_amd64.tar.gz" "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_arm64.tar.gz" "$(DIST_DIR)/checksums_$(VERSION).txt"
+	GOCACHE="$(GOCACHE)" GOOS=darwin GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_darwin_amd64/yllmd" ./cmd/yllmd
+	GOCACHE="$(GOCACHE)" GOOS=darwin GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_darwin_amd64/yllmctl" ./cmd/yllmctl
 	GOCACHE="$(GOCACHE)" GOOS=darwin GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64/yllmd" ./cmd/yllmd
 	GOCACHE="$(GOCACHE)" GOOS=darwin GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64/yllmctl" ./cmd/yllmctl
 	GOCACHE="$(GOCACHE)" GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64/yllmd" ./cmd/yllmd
 	GOCACHE="$(GOCACHE)" GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64/yllmctl" ./cmd/yllmctl
+	GOCACHE="$(GOCACHE)" GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_linux_arm64/yllmd" ./cmd/yllmd
+	GOCACHE="$(GOCACHE)" GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_linux_arm64/yllmctl" ./cmd/yllmctl
+	GOCACHE="$(GOCACHE)" GOOS=freebsd GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_amd64/yllmd" ./cmd/yllmd
+	GOCACHE="$(GOCACHE)" GOOS=freebsd GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_amd64/yllmctl" ./cmd/yllmctl
+	GOCACHE="$(GOCACHE)" GOOS=freebsd GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_arm64/yllmd" ./cmd/yllmd
+	GOCACHE="$(GOCACHE)" GOOS=freebsd GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_arm64/yllmctl" ./cmd/yllmctl
+	cp README.md LICENSE config.example.yaml "$(DIST_DIR)/yllmd_$(VERSION)_darwin_amd64/"
 	cp README.md LICENSE config.example.yaml "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64/"
 	cp README.md LICENSE config.example.yaml "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64/"
+	cp README.md LICENSE config.example.yaml "$(DIST_DIR)/yllmd_$(VERSION)_linux_arm64/"
+	cp README.md LICENSE config.example.yaml "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_amd64/"
+	cp README.md LICENSE config.example.yaml "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_arm64/"
+	cp -R docs packaging "$(DIST_DIR)/yllmd_$(VERSION)_darwin_amd64/"
 	cp -R docs packaging "$(DIST_DIR)/yllmd_$(VERSION)_darwin_arm64/"
 	cp -R docs packaging "$(DIST_DIR)/yllmd_$(VERSION)_linux_amd64/"
+	cp -R docs packaging "$(DIST_DIR)/yllmd_$(VERSION)_linux_arm64/"
+	cp -R docs packaging "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_amd64/"
+	cp -R docs packaging "$(DIST_DIR)/yllmd_$(VERSION)_freebsd_arm64/"
+	cd "$(DIST_DIR)" && tar -czf "yllmd_$(VERSION)_darwin_amd64.tar.gz" "yllmd_$(VERSION)_darwin_amd64"
 	cd "$(DIST_DIR)" && tar -czf "yllmd_$(VERSION)_darwin_arm64.tar.gz" "yllmd_$(VERSION)_darwin_arm64"
 	cd "$(DIST_DIR)" && tar -czf "yllmd_$(VERSION)_linux_amd64.tar.gz" "yllmd_$(VERSION)_linux_amd64"
-	cd "$(DIST_DIR)" && shasum -a 256 "yllmd_$(VERSION)_darwin_arm64.tar.gz" "yllmd_$(VERSION)_linux_amd64.tar.gz" > "checksums_$(VERSION).txt"
+	cd "$(DIST_DIR)" && tar -czf "yllmd_$(VERSION)_linux_arm64.tar.gz" "yllmd_$(VERSION)_linux_arm64"
+	cd "$(DIST_DIR)" && tar -czf "yllmd_$(VERSION)_freebsd_amd64.tar.gz" "yllmd_$(VERSION)_freebsd_amd64"
+	cd "$(DIST_DIR)" && tar -czf "yllmd_$(VERSION)_freebsd_arm64.tar.gz" "yllmd_$(VERSION)_freebsd_arm64"
+	cd "$(DIST_DIR)" && shasum -a 256 "yllmd_$(VERSION)_darwin_amd64.tar.gz" "yllmd_$(VERSION)_darwin_arm64.tar.gz" "yllmd_$(VERSION)_linux_amd64.tar.gz" "yllmd_$(VERSION)_linux_arm64.tar.gz" "yllmd_$(VERSION)_freebsd_amd64.tar.gz" "yllmd_$(VERSION)_freebsd_arm64.tar.gz" > "checksums_$(VERSION).txt"
 
 smoke:
 	GOCACHE="$(GOCACHE)" ./scripts/smoke-fake.sh

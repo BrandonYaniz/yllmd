@@ -34,6 +34,7 @@ type InstallResult struct {
 	VersionID    string
 	ModelPath    string
 	ManifestPath string
+	ChecksumPath string
 	Activation   *Activation
 }
 
@@ -88,6 +89,10 @@ func (s ModelStore) VersionModelPath(modelName, versionID string) string {
 
 func (s ModelStore) ManifestPath(modelName, versionID string) string {
 	return filepath.Join(s.VersionDir(modelName, versionID), "manifest.json")
+}
+
+func (s ModelStore) ChecksumPath(modelName, versionID string) string {
+	return filepath.Join(s.VersionDir(modelName, versionID), "checksum.sha256")
 }
 
 func (s ModelStore) RollbackPath(modelName string) string {
@@ -151,6 +156,9 @@ func (s ModelStore) InstallLocalFile(request InstallRequest) (InstallResult, err
 	if err := writeManifest(filepath.Join(tmpDir, "manifest.json"), manifest); err != nil {
 		return InstallResult{}, err
 	}
+	if err := writeChecksum(filepath.Join(tmpDir, "checksum.sha256"), manifest.SHA256); err != nil {
+		return InstallResult{}, err
+	}
 	if err := os.Rename(tmpDir, versionDir); err != nil {
 		return InstallResult{}, err
 	}
@@ -161,6 +169,7 @@ func (s ModelStore) InstallLocalFile(request InstallRequest) (InstallResult, err
 		VersionID:    versionID,
 		ModelPath:    s.VersionModelPath(modelName, versionID),
 		ManifestPath: s.ManifestPath(modelName, versionID),
+		ChecksumPath: s.ChecksumPath(modelName, versionID),
 	}
 	if request.Activate {
 		activation, err := s.ActivateVersion(modelName, versionID)
@@ -301,6 +310,10 @@ func copyFile(dst, src string) error {
 
 func writeManifest(path string, manifest Manifest) error {
 	return writeJSON(path, manifest)
+}
+
+func writeChecksum(path, checksum string) error {
+	return os.WriteFile(path, []byte(strings.ToLower(strings.TrimSpace(checksum))+"  model.gguf\n"), 0o600)
 }
 
 func writeJSON(path string, value any) error {
