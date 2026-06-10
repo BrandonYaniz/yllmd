@@ -56,6 +56,7 @@ Each tarball includes:
 
 - `yllmd`
 - `yllmctl`
+- `VERSION`
 - `README.md`
 - `LICENSE`
 - `config.example.yaml`
