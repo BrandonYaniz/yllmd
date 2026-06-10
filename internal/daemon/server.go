@@ -175,6 +175,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 		s.installModel(client, req)
 	case "activate":
 		s.activateModel(client, req)
+	case "versions":
+		s.listModelVersions(client, req)
 	case "rollback":
 		s.rollbackModel(client, req)
 	default:
@@ -245,6 +247,24 @@ func (s *Server) activateModel(client *clientConn, req protocol.Request) {
 		Version: activation.VersionID,
 		Path:    storage.NewModelStore(s.cfg).CurrentModelPath(activation.ModelName),
 	})
+}
+
+func (s *Server) listModelVersions(client *clientConn, req protocol.Request) {
+	if err := req.ValidateModelVersions(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		return
+	}
+	model, err := s.models.Resolve(req.Model)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
+		return
+	}
+	versions, err := storage.NewModelStore(s.cfg).ListVersions(model.Name)
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "versions_failed", Message: err.Error()})
+		return
+	}
+	_ = client.write(protocol.Event{Type: "versions", ID: req.ID, Model: model.Name, Versions: modelVersions(versions)})
 }
 
 func (s *Server) rollbackModel(client *clientConn, req protocol.Request) {
@@ -470,6 +490,27 @@ func (s *Server) modelDescriptors() []protocol.ModelDescriptor {
 			descriptors[i].ProviderMetadata = make(map[string]string)
 		}
 		descriptors[i].ProviderMetadata["active_version"] = activeVersion
+	}
+	return descriptors
+}
+
+func modelVersions(versions []storage.VersionInfo) []protocol.ModelVersion {
+	descriptors := make([]protocol.ModelVersion, 0, len(versions))
+	for _, version := range versions {
+		descriptor := protocol.ModelVersion{
+			Version:      version.VersionID,
+			Active:       version.Active,
+			Path:         version.ModelPath,
+			ManifestPath: version.ManifestPath,
+			ChecksumPath: version.ChecksumPath,
+		}
+		if version.Manifest != nil {
+			descriptor.SHA256 = version.Manifest.SHA256
+			if !version.Manifest.InstalledAt.IsZero() {
+				descriptor.InstalledAt = version.Manifest.InstalledAt.Format(time.RFC3339)
+			}
+		}
+		descriptors = append(descriptors, descriptor)
 	}
 	return descriptors
 }

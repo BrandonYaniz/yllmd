@@ -32,6 +32,8 @@ A safe update flow is:
 
 Use `yllmctl models activate <model> -version <id>` to switch to an already installed version without reinstalling the model file. Activation requires the daemon to be idle.
 
+Use `yllmctl models versions <model>` to inspect installed versions, active state, checksum metadata, and storage paths.
+
 Installed versions include:
 
 ```text

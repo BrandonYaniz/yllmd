@@ -207,6 +207,38 @@ func TestInstallLocalFileActivatesVersion(t *testing.T) {
 	}
 }
 
+func TestListVersions(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	firstSource, firstChecksum := writeSourceModel(t, []byte("first"))
+	secondSource, secondChecksum := writeSourceModel(t, []byte("second"))
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "fast", VersionID: "v2", SourcePath: secondSource, SHA256: secondChecksum, Activate: false}); err != nil {
+		t.Fatalf("install v2: %v", err)
+	}
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "fast", VersionID: "v1", SourcePath: firstSource, SHA256: firstChecksum, Activate: true}); err != nil {
+		t.Fatalf("install v1: %v", err)
+	}
+
+	versions, err := store.ListVersions("fast")
+	if err != nil {
+		t.Fatalf("ListVersions returned error: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("version count = %d", len(versions))
+	}
+	if versions[0].VersionID != "v1" || !versions[0].Active {
+		t.Fatalf("unexpected first version: %#v", versions[0])
+	}
+	if versions[1].VersionID != "v2" || versions[1].Active {
+		t.Fatalf("unexpected second version: %#v", versions[1])
+	}
+	if versions[0].Manifest == nil || versions[0].Manifest.SHA256 != firstChecksum {
+		t.Fatalf("unexpected first manifest: %#v", versions[0].Manifest)
+	}
+	if versions[0].ChecksumPath != store.ChecksumPath("fast", "v1") {
+		t.Fatalf("checksum path = %q", versions[0].ChecksumPath)
+	}
+}
+
 func TestInstallLocalFileRejectsDuplicateVersion(t *testing.T) {
 	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
 	source, checksum := writeSourceModel(t, []byte("installed model"))

@@ -64,6 +64,7 @@ type Event struct {
 	Provider      string            `json:"provider,omitempty"`
 	Model         string            `json:"model,omitempty"`
 	Version       string            `json:"version,omitempty"`
+	Versions      []ModelVersion    `json:"versions,omitempty"`
 	Path          string            `json:"path,omitempty"`
 	Models        []ModelDescriptor `json:"models,omitempty"`
 	Text          string            `json:"text,omitempty"`
@@ -128,6 +129,19 @@ func (r Request) ValidateModelActivate() error {
 	return nil
 }
 
+func (r Request) ValidateModelVersions() error {
+	if r.Type != MessageModels {
+		return fmt.Errorf("request type must be models")
+	}
+	if r.Action != "versions" {
+		return fmt.Errorf("models request action must be versions")
+	}
+	if strings.TrimSpace(r.Model) == "" {
+		return fmt.Errorf("model is required")
+	}
+	return nil
+}
+
 type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
@@ -151,6 +165,16 @@ type ModelDescriptor struct {
 	Resident         bool              `json:"resident"`
 	Capabilities     ModelCapabilities `json:"capabilities"`
 	ProviderMetadata map[string]string `json:"provider_metadata,omitempty"`
+}
+
+type ModelVersion struct {
+	Version      string `json:"version"`
+	Active       bool   `json:"active,omitempty"`
+	Path         string `json:"path,omitempty"`
+	ManifestPath string `json:"manifest_path,omitempty"`
+	ChecksumPath string `json:"checksum_path,omitempty"`
+	SHA256       string `json:"sha256,omitempty"`
+	InstalledAt  string `json:"installed_at,omitempty"`
 }
 
 type ModelID struct {

@@ -182,6 +182,20 @@ func TestValidateModelActivateRejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestValidateModelVersions(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "versions", Model: "fast"}
+	if err := req.ValidateModelVersions(); err != nil {
+		t.Fatalf("ValidateModelVersions returned error: %v", err)
+	}
+}
+
+func TestValidateModelVersionsRejectsMissingModel(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "versions"}
+	if err := req.ValidateModelVersions(); err == nil {
+		t.Fatal("expected missing model error")
+	}
+}
+
 func TestWriteEvent(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteEvent(&buf, Event{Type: "health", ID: "health-1", Status: "ok"})
@@ -194,6 +208,28 @@ func TestWriteEvent(t *testing.T) {
 	}
 	if event.Type != "health" || event.Status != "ok" {
 		t.Fatalf("unexpected event: %#v", event)
+	}
+}
+
+func TestWriteVersionsEvent(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteEvent(&buf, Event{
+		Type:  "versions",
+		ID:    "models-1",
+		Model: "fast",
+		Versions: []ModelVersion{
+			{Version: "v1", Active: true, SHA256: "abc"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteEvent returned error: %v", err)
+	}
+	var event Event
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
+		t.Fatalf("event is not JSON: %v", err)
+	}
+	if len(event.Versions) != 1 || event.Versions[0].Version != "v1" || !event.Versions[0].Active {
+		t.Fatalf("unexpected versions event: %#v", event)
 	}
 }
 

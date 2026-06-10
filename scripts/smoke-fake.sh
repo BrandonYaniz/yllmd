@@ -104,6 +104,7 @@ printf 'smoke model\n' >"$MODEL_PATH"
 MODEL_SHA=$(shasum -a 256 "$MODEL_PATH" | awk '{print $1}')
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models install fast -file "$MODEL_PATH" -version smoke-v1 -sha256 "$MODEL_SHA" -activate=false | grep '"type": "installed"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models activate fast -version smoke-v1 | grep '"type": "activated"' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" models versions fast | grep '"version": "smoke-v1"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models list | grep '"active_version": "smoke-v1"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" generate -stream=false -prompt "release smoke" | grep 'fake local response: release smoke' >/dev/null
 

@@ -282,6 +282,33 @@ func TestActivateModelRequiresIdleDaemon(t *testing.T) {
 	}
 }
 
+func TestListModelVersions(t *testing.T) {
+	cfg := modelTestConfig(t)
+	firstPath, firstChecksum := writeDaemonSourceModel(t, []byte("first"))
+	secondPath, secondChecksum := writeDaemonSourceModel(t, []byte("second"))
+	server := NewServer(cfg, nil, nil)
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-1", Action: "install", Model: "fast", Version: "v1", File: firstPath, SHA256: firstChecksum})
+	activate := false
+	server.handleModels(newMemoryClient(), protocol.Request{Type: protocol.MessageModels, ID: "install-2", Action: "install", Model: "fast", Version: "v2", File: secondPath, SHA256: secondChecksum, Activate: &activate})
+	client := newMemoryClient()
+
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "versions-1", Action: "versions", Model: "fast"})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "versions" || event.Model != "fast" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	if len(event.Versions) != 2 {
+		t.Fatalf("version count = %d", len(event.Versions))
+	}
+	if event.Versions[0].Version != "v1" || !event.Versions[0].Active || event.Versions[0].SHA256 != firstChecksum {
+		t.Fatalf("unexpected first version: %#v", event.Versions[0])
+	}
+	if event.Versions[1].Version != "v2" || event.Versions[1].Active || event.Versions[1].SHA256 != secondChecksum {
+		t.Fatalf("unexpected second version: %#v", event.Versions[1])
+	}
+}
+
 func TestRollbackModel(t *testing.T) {
 	cfg := modelTestConfig(t)
 	firstPath, firstChecksum := writeDaemonSourceModel(t, []byte("first"))

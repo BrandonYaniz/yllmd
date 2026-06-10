@@ -44,7 +44,7 @@ Implemented:
 - Unix domain socket server using JSON Lines.
 - FIFO request queueing and cancellation.
 - Local runner process integration over stdio JSON Lines.
-- Health, status, providers, generation, model list, model install, model activate, and rollback commands through `yllmctl`.
+- Health, status, providers, generation, model list, model versions, model install, model activate, and rollback commands through `yllmctl`.
 - Local model version activation through a `current` symlink.
 
 Not yet implemented:

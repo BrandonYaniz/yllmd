@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,15 @@ type InstallResult struct {
 type RollbackResult struct {
 	ModelName string
 	VersionID string
+}
+
+type VersionInfo struct {
+	VersionID    string
+	ModelPath    string
+	ManifestPath string
+	ChecksumPath string
+	Active       bool
+	Manifest     *Manifest
 }
 
 type Manifest struct {
@@ -189,6 +199,43 @@ func (s ModelStore) ActiveVersion(modelName string) (string, error) {
 	return filepath.Base(filepath.Clean(target)), nil
 }
 
+func (s ModelStore) ListVersions(modelName string) ([]VersionInfo, error) {
+	modelName = cleanPathPart(modelName)
+	versionsDir := filepath.Join(s.ModelDir(modelName), "versions")
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	activeVersion, _ := s.ActiveVersion(modelName)
+	versions := make([]VersionInfo, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		versionID := entry.Name()
+		version := VersionInfo{
+			VersionID:    versionID,
+			ModelPath:    s.VersionModelPath(modelName, versionID),
+			ManifestPath: s.ManifestPath(modelName, versionID),
+			ChecksumPath: s.ChecksumPath(modelName, versionID),
+			Active:       versionID == activeVersion,
+		}
+		manifest, err := readManifest(version.ManifestPath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		version.Manifest = manifest
+		versions = append(versions, version)
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].VersionID < versions[j].VersionID
+	})
+	return versions, nil
+}
+
 func (s ModelStore) ActivateVersion(modelName, versionID string) (Activation, error) {
 	versionDir := s.VersionDir(modelName, versionID)
 	if info, err := os.Stat(versionDir); err != nil {
@@ -310,6 +357,18 @@ func copyFile(dst, src string) error {
 
 func writeManifest(path string, manifest Manifest) error {
 	return writeJSON(path, manifest)
+}
+
+func readManifest(path string) (*Manifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
 }
 
 func writeChecksum(path, checksum string) error {
