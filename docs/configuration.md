@@ -50,7 +50,9 @@ If only one local model is configured, all local model requests may use that mod
 
 ## Remote providers
 
-Remote provider credentials should be supplied through environment variables or protected files.
+Remote provider configuration is reserved for future releases. Remote generation is not implemented in the current local-only release surface, and `routing.default_provider` must be `local`.
+
+When remote providers are implemented, credentials should be supplied through environment variables or protected files.
 
 ```yaml
 remote_providers:

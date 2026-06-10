@@ -11,9 +11,16 @@ import (
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 )
 
+var version = "dev"
+
 func main() {
 	socketPath := flag.String("socket", "/var/run/yllmd/yllmd.sock", "path to yllmd Unix socket")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	args := flag.Args()
 	if len(args) == 0 {
@@ -26,6 +33,8 @@ func main() {
 		runSingle(*socketPath, protocol.MessageHealth)
 	case "status":
 		runSingle(*socketPath, protocol.MessageStatus)
+	case "providers":
+		runSingle(*socketPath, protocol.MessageProviders)
 	case "models":
 		runModels(*socketPath, args[1:])
 	case "cancel":
@@ -233,7 +242,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|models list|models install model -file path -version id -sha256 hash|models rollback model|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|providers|models list|models install model -file path -version id -sha256 hash|models rollback model|cancel id|generate>\n")
 }
 
 func fatal(err error) {

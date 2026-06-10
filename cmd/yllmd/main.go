@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,10 +15,17 @@ import (
 	"github.com/BrandonYaniz/yllmd/internal/providers/local"
 )
 
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "config.example.yaml", "path to YAML configuration")
 	useFakeProvider := flag.Bool("fake-provider", false, "use deterministic fake local provider instead of yllama-runner")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg, err := config.Load(*configPath)

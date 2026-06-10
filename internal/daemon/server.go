@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -75,6 +76,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	s.listener = ln
 	if err := chmodSocket(s.cfg.Server.SocketPath, s.cfg.Server.SocketMode); err != nil {
+		_ = ln.Close()
+		return err
+	}
+	if err := chgrpSocket(s.cfg.Server.SocketPath, s.cfg.Server.SocketGroup); err != nil {
 		_ = ln.Close()
 		return err
 	}
@@ -488,4 +493,19 @@ func chmodSocket(path, modeText string) error {
 		return fmt.Errorf("invalid socket mode %q: %w", modeText, err)
 	}
 	return os.Chmod(path, os.FileMode(mode))
+}
+
+func chgrpSocket(path, groupName string) error {
+	if groupName == "" {
+		return nil
+	}
+	group, err := user.LookupGroup(groupName)
+	if err != nil {
+		return fmt.Errorf("lookup socket group %q: %w", groupName, err)
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return fmt.Errorf("invalid gid %q for socket group %q: %w", group.Gid, groupName, err)
+	}
+	return os.Chown(path, -1, gid)
 }

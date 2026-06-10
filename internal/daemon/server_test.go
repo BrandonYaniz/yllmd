@@ -81,6 +81,18 @@ func TestDaemonStatus(t *testing.T) {
 	}
 }
 
+func TestProvidersRequest(t *testing.T) {
+	server := NewServer(testConfig(), nil, nil)
+	client := newMemoryClient()
+
+	server.handleRequest(client, protocol.Request{Type: protocol.MessageProviders, ID: "providers-1"})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "providers" || event.Provider != "local" {
+		t.Fatalf("unexpected providers event: %#v", event)
+	}
+}
+
 func TestInstallModel(t *testing.T) {
 	cfg := modelTestConfig(t)
 	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
@@ -299,6 +311,22 @@ func TestModelDescriptorsIncludeActiveVersion(t *testing.T) {
 	}
 	if descriptors[0].ProviderMetadata["active_version"] != "v1" {
 		t.Fatalf("active version = %q", descriptors[0].ProviderMetadata["active_version"])
+	}
+}
+
+func TestChgrpSocketSkipsEmptyGroup(t *testing.T) {
+	if err := chgrpSocket(filepath.Join(t.TempDir(), "missing.sock"), ""); err != nil {
+		t.Fatalf("chgrpSocket returned error: %v", err)
+	}
+}
+
+func TestChgrpSocketRejectsUnknownGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "socket")
+	if err := os.WriteFile(path, []byte("socket placeholder"), 0o600); err != nil {
+		t.Fatalf("write placeholder: %v", err)
+	}
+	if err := chgrpSocket(path, "yllmd-test-group-does-not-exist"); err == nil {
+		t.Fatal("expected unknown group error")
 	}
 }
 

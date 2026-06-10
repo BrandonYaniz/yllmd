@@ -74,8 +74,11 @@ Supported provider values:
 
 - `auto`
 - `local`
+
+For the current local-only release surface, only `local` is implemented. `auto` resolves to the configured default provider, which must be `local`.
+
+The protocol reserves these provider names for future releases:
+
 - `openai`
 - `gemini`
 - `anthropic`
-
-By default, `auto` does not route to remote providers unless remote auto-routing is explicitly enabled.

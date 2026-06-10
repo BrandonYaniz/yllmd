@@ -1,6 +1,6 @@
 # yllmd
 
-`yllmd` is a local-first LLM broker daemon. It exposes a Unix domain socket for local applications, manages request queueing, routes requests to local or remote model providers, and controls local model lifecycle.
+`yllmd` is a local-first LLM broker daemon. It exposes a Unix domain socket for local applications, manages request queueing, routes requests to a local model runner, and controls local model lifecycle.
 
 The daemon is designed for systems where multiple local tools need access to a shared LLM service without each tool loading and managing its own model.
 
@@ -10,7 +10,7 @@ The daemon is designed for systems where multiple local tools need access to a s
 - Use Unix domain sockets instead of TCP or HTTP for local clients.
 - Support FIFO request queueing.
 - Manage local model loading, unloading, cooldowns, updates, and rollback.
-- Route requests to local models, OpenAI, Gemini, or Anthropic through one request shape.
+- Route requests to local models through one request shape.
 - Keep provider credentials in daemon-owned configuration.
 - Keep application-specific prompting outside the daemon.
 
@@ -29,15 +29,30 @@ client applications
   -> Unix domain socket
   -> yllmd
   -> FIFO scheduler
-  -> provider router
-  -> local runner or remote provider
+  -> local provider
+  -> local runner
 ```
 
-Local inference is handled by an external runner process, such as `yllama-runner`, over stdio JSON Lines. Remote providers are handled through provider adapters.
+Local inference is handled by an external runner process, such as `yllama-runner`, over stdio JSON Lines.
 
 ## Status
 
-Early development.
+Pre-release. The current implementation targets a local-only release surface. Versions use `YY.MM.DD.NN` for development and beta builds, and only versions tagged with `-Release` should be considered release builds. Remote provider adapters and automatic model update checks are planned but not part of the current release surface.
+
+Implemented:
+
+- Unix domain socket server using JSON Lines.
+- FIFO request queueing and cancellation.
+- Local runner process integration over stdio JSON Lines.
+- Health, status, providers, generation, model list, model install, and rollback commands through `yllmctl`.
+- Local model version activation through a `current` symlink.
+
+Not yet implemented:
+
+- OpenAI, Gemini, and Anthropic generation adapters.
+- Automatic model update checks and downloads.
+- Runtime configuration reload.
+- Packaged installers.
 
 ## License
 

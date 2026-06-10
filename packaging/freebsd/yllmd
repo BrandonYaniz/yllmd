@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# PROVIDE: yllmd
+# REQUIRE: LOGIN
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="yllmd"
+rcvar="yllmd_enable"
+
+: ${yllmd_enable:="NO"}
+: ${yllmd_user:="yllmd"}
+: ${yllmd_group:="yllm"}
+: ${yllmd_config:="/usr/local/etc/yllmd/config.yaml"}
+: ${yllmd_command:="/usr/local/sbin/yllmd"}
+: ${yllmd_pidfile:="/var/run/yllmd/yllmd.pid"}
+
+command="/usr/sbin/daemon"
+pidfile="${yllmd_pidfile}"
+procname="${yllmd_command}"
+command_args="-p ${pidfile} -u ${yllmd_user} ${yllmd_command} -config ${yllmd_config}"
+
+start_precmd="yllmd_precmd"
+
+yllmd_precmd()
+{
+	install -d -o "${yllmd_user}" -g "${yllmd_group}" -m 0750 /var/run/yllmd
+	install -d -o "${yllmd_user}" -g "${yllmd_group}" -m 0750 /var/lib/yllmd
+	install -d -o "${yllmd_user}" -g "${yllmd_group}" -m 0750 /var/log/yllmd
+}
+
+load_rc_config "$name"
+run_rc_command "$1"

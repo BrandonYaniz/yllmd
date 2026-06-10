@@ -1,0 +1,100 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+TMP_DIR=$(mktemp -d "/private/tmp/yllmd-smoke.XXXXXX")
+SOCKET_PATH="$TMP_DIR/yllmd.sock"
+CONFIG_PATH="$TMP_DIR/config.yaml"
+DAEMON_LOG="$TMP_DIR/yllmd.log"
+
+cleanup() {
+	if [ "${DAEMON_PID:-}" != "" ]; then
+		kill "$DAEMON_PID" 2>/dev/null || true
+		wait "$DAEMON_PID" 2>/dev/null || true
+	fi
+	rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT INT TERM
+
+cat >"$CONFIG_PATH" <<EOF
+server:
+  socket_path: $SOCKET_PATH
+  socket_mode: "0600"
+  socket_group: ""
+
+queue:
+  policy: fifo
+  max_depth: 8
+  default_timeout: 30s
+
+model_lifecycle:
+  resident_model: fast
+  idle_cooldown: 1m
+  max_loaded_models: 1
+  use_current_or_better: true
+  unavailable_tier_policy: use_available
+
+paths:
+  state_dir: $TMP_DIR/state
+  model_dir: $TMP_DIR/state/models
+  runtime_dir: $TMP_DIR/run
+  log_dir: $TMP_DIR/log
+
+updates:
+  check_interval: 24h
+  default_policy: notify
+
+local_models:
+  fast:
+    catalog_id: smoke_fast
+    tier: fast
+    resident: true
+    backend:
+      type: process
+      command: /bin/false
+      transport: stdio
+    runtime:
+      context_tokens: 1024
+      threads: 1
+
+remote_providers:
+  openai:
+    enabled: false
+    api_key_env: OPENAI_API_KEY
+
+routing:
+  default_provider: local
+  allow_auto_remote: false
+  require_explicit_remote_provider: true
+EOF
+
+cd "$ROOT_DIR"
+go run ./cmd/yllmd -config "$CONFIG_PATH" -fake-provider >"$DAEMON_LOG" 2>&1 &
+DAEMON_PID=$!
+
+i=0
+while [ "$i" -lt 400 ]; do
+	if [ -S "$SOCKET_PATH" ]; then
+		break
+	fi
+	if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+		echo "yllmd exited before socket was ready" >&2
+		cat "$DAEMON_LOG" >&2
+		exit 1
+	fi
+	i=$((i + 1))
+	sleep 0.05
+done
+
+if [ ! -S "$SOCKET_PATH" ]; then
+	echo "timed out waiting for socket $SOCKET_PATH" >&2
+	cat "$DAEMON_LOG" >&2
+	exit 1
+fi
+
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" health | grep '"status": "ok"' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" status | grep '"provider": "local"' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" providers | grep '"provider": "local"' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" generate -stream=false -prompt "release smoke" | grep 'fake local response: release smoke' >/dev/null
+
+echo "smoke ok"
