@@ -5,7 +5,7 @@ DIST_DIR ?= dist
 GOCACHE ?= $(CURDIR)/.cache/go-build
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: all check-version check-release-version test race cover build dist smoke release-check clean
+.PHONY: all check-version check-release-version test race vet cover build dist smoke release-check clean
 
 all: test build
 
@@ -20,6 +20,9 @@ test:
 
 race:
 	GOCACHE="$(GOCACHE)" $(GO) test $(GOFLAGS) -race ./...
+
+vet:
+	GOCACHE="$(GOCACHE)" $(GO) vet $(GOFLAGS) ./...
 
 cover:
 	GOCACHE="$(GOCACHE)" $(GO) test $(GOFLAGS) -cover ./...
@@ -74,7 +77,7 @@ dist: check-version
 smoke:
 	GOCACHE="$(GOCACHE)" ./scripts/smoke-fake.sh
 
-release-check: check-release-version test race smoke dist
+release-check: check-release-version test race vet smoke dist
 
 clean:
 	rm -rf "$(DIST_DIR)" build .cache yllmd yllmctl

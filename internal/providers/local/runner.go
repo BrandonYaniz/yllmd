@@ -269,7 +269,6 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 		return nil, fmt.Errorf("start runner: %w", err)
 	}
 
-	var stdinMu sync.Mutex
 	lines := readRunnerLines(stdout)
 	go p.logRunnerStderr(stderr, model.Name)
 
@@ -283,7 +282,6 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 		stdin:     stdin,
 		lines:     lines,
 		done:      done,
-		stdinMu:   stdinMu,
 	}
 
 	hello, err := session.readEvent(ctx)

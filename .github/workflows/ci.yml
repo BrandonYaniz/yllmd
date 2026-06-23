@@ -23,6 +23,9 @@ jobs:
       - name: Race test
         run: make race
 
+      - name: Vet
+        run: make vet
+
       - name: Build
         run: make build
 
