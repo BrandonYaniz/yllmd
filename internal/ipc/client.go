@@ -3,6 +3,7 @@ package ipc
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net"
 	"time"
 
@@ -50,4 +51,9 @@ func (c *Client) ReadEvent() (protocol.Event, error) {
 		return protocol.Event{}, err
 	}
 	return event, nil
+}
+
+func (c *Client) ReadRaw(w io.Writer) error {
+	_, err := io.Copy(w, c.conn)
+	return err
 }

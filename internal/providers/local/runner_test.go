@@ -14,6 +14,8 @@ import (
 )
 
 func TestRunnerProviderGenerateCompact(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
 	runnerPath := writeFakeRunner(t)
 	cfg := config.Config{
 		Paths: config.PathsConfig{ModelDir: t.TempDir()},
@@ -81,6 +83,13 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 	if completed.Usage == nil || completed.Usage.OutputTokens != 3 {
 		t.Fatalf("unexpected usage: %#v", completed.Usage)
 	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read runner log: %v", err)
+	}
+	if !strings.Contains(string(data), `"output":{"format":"json","delivery":"complete"}`) {
+		t.Fatalf("generate command did not include json complete output setting:\n%s", data)
+	}
 }
 
 func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
@@ -145,7 +154,7 @@ log_event() {
 extract_id() {
   printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
 }
-printf '%s\n' '{"type":"hello","protocol_version":1,"runner":"yllama-runner","capabilities":["generate","stream","cancel"]}'
+printf '%s\n' '{"type":"hello","protocol_version":1,"runner":"yllama-runner","capabilities":["generate","stream","cancel","output_modes"]}'
 while IFS= read -r line; do
   id=$(extract_id "$line")
   case "$line" in
@@ -154,7 +163,7 @@ while IFS= read -r line; do
       printf '%s\n' "{\"type\":\"ready\",\"id\":\"$id\",\"model_path\":\"/tmp/model.gguf\",\"context_tokens\":1024}"
       ;;
     *'"type":"generate"'*)
-      log_event "generate $id"
+      log_event "generate $id $line"
       printf '%s\n' "{\"type\":\"started\",\"id\":\"$id\"}"
       printf '%s\n' "{\"type\":\"completed\",\"id\":\"$id\",\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5},\"text\":\"fake runner response\"}"
       ;;

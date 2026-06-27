@@ -395,6 +395,78 @@ func TestModelDescriptorsIncludeActiveVersion(t *testing.T) {
 	}
 }
 
+func TestRunJobWritesCompletedTextOutput(t *testing.T) {
+	provider := &scriptedProvider{events: []protocol.Event{
+		{Type: "started", ID: "req-1"},
+		{Type: "completed", ID: "req-1", Text: "full response"},
+	}}
+	server := NewServer(modelTestConfig(t), provider, nil)
+	stream := false
+	client := newMemoryClient()
+
+	server.runJob(&generateJob{
+		request: protocol.Request{
+			Type:   protocol.MessageGenerate,
+			ID:     "req-1",
+			Model:  "fast",
+			Stream: &stream,
+			Input:  &protocol.Input{Kind: "prompt", Prompt: "hello"},
+			Settings: protocol.GenerationSettings{Output: &protocol.Output{
+				Format:   "text",
+				Delivery: "complete",
+			}},
+		},
+		client: client,
+		ctx:    context.Background(),
+		cancel: func() {},
+	})
+
+	conn := client.conn.(*memoryConn)
+	if got := conn.buf.String(); got != "full response" {
+		t.Fatalf("raw output = %q", got)
+	}
+	if provider.stream {
+		t.Fatal("expected compact provider request")
+	}
+}
+
+func TestRunJobWritesStreamingTextOutput(t *testing.T) {
+	provider := &scriptedProvider{events: []protocol.Event{
+		{Type: "started", ID: "req-1"},
+		{Type: "delta", ID: "req-1", Text: "hello"},
+		{Type: "delta", ID: "req-1", Text: " world"},
+		{Type: "completed", ID: "req-1"},
+	}}
+	server := NewServer(modelTestConfig(t), provider, nil)
+	stream := true
+	client := newMemoryClient()
+
+	server.runJob(&generateJob{
+		request: protocol.Request{
+			Type:   protocol.MessageGenerate,
+			ID:     "req-1",
+			Model:  "fast",
+			Stream: &stream,
+			Input:  &protocol.Input{Kind: "prompt", Prompt: "hello"},
+			Settings: protocol.GenerationSettings{Output: &protocol.Output{
+				Format:   "text",
+				Delivery: "stream",
+			}},
+		},
+		client: client,
+		ctx:    context.Background(),
+		cancel: func() {},
+	})
+
+	conn := client.conn.(*memoryConn)
+	if got := conn.buf.String(); got != "hello world" {
+		t.Fatalf("raw output = %q", got)
+	}
+	if !provider.stream {
+		t.Fatal("expected streaming provider request")
+	}
+}
+
 func TestChgrpSocketSkipsEmptyGroup(t *testing.T) {
 	if err := chgrpSocket(filepath.Join(t.TempDir(), "missing.sock"), ""); err != nil {
 		t.Fatalf("chgrpSocket returned error: %v", err)
@@ -526,4 +598,23 @@ func (p *countingProvider) Generate(context.Context, providers.GenerateRequest) 
 func (p *countingProvider) Close(context.Context) error {
 	p.closeCount++
 	return nil
+}
+
+type scriptedProvider struct {
+	events []protocol.Event
+	stream bool
+}
+
+func (p *scriptedProvider) ID() string {
+	return "local"
+}
+
+func (p *scriptedProvider) Generate(ctx context.Context, request providers.GenerateRequest) (<-chan protocol.Event, error) {
+	p.stream = request.Stream
+	events := make(chan protocol.Event, len(p.events))
+	for _, event := range p.events {
+		events <- event
+	}
+	close(events)
+	return events, nil
 }

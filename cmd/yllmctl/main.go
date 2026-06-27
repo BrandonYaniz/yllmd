@@ -242,9 +242,14 @@ func runGenerate(socketPath string, args []string) {
 	model := generateFlags.String("model", "fast", "model tier or alias")
 	prompt := generateFlags.String("prompt", "", "prompt text")
 	stream := generateFlags.Bool("stream", true, "stream text deltas")
+	output := generateFlags.String("output", "json", "output format: json or text")
 	maxTokens := generateFlags.Int("max-tokens", 128, "maximum output tokens")
 	if err := generateFlags.Parse(args); err != nil {
 		fatal(err)
+	}
+	outputFormat := normalizeOutputFormat(*output)
+	if outputFormat == "" {
+		fatal(fmt.Errorf("unsupported output format %q", *output))
 	}
 	if *prompt == "" {
 		remaining := generateFlags.Args()
@@ -273,33 +278,69 @@ func runGenerate(socketPath string, args []string) {
 			Kind:   "prompt",
 			Prompt: *prompt,
 		},
-		Settings: protocol.GenerationSettings{MaxTokens: maxTokens},
+		Settings: protocol.GenerationSettings{
+			MaxTokens: maxTokens,
+			Output: &protocol.Output{
+				Format:   outputFormat,
+				Delivery: outputDelivery(*stream),
+			},
+		},
 	}
 	if err := client.Send(request); err != nil {
 		fatal(err)
+	}
+	if outputFormat == "text" {
+		if err := client.ReadRaw(os.Stdout); err != nil {
+			fatal(err)
+		}
+		return
 	}
 	for {
 		event, err := client.ReadEvent()
 		if err != nil {
 			fatal(err)
 		}
-		if event.Type == "delta" {
-			fmt.Print(event.Text)
-		} else {
-			printJSON(event)
+		if *stream {
+			printJSONLine(event)
 		}
 		switch event.Type {
 		case "completed", "error", "cancelled":
-			if *stream {
-				fmt.Println()
+			if !*stream {
+				printJSON(event)
 			}
 			return
 		}
 	}
 }
 
+func outputDelivery(stream bool) string {
+	if stream {
+		return "stream"
+	}
+	return "complete"
+}
+
+func normalizeOutputFormat(format string) string {
+	switch format {
+	case "", "json":
+		return "json"
+	case "text", "raw":
+		return "text"
+	default:
+		return ""
+	}
+}
+
 func printJSON(value any) {
 	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Println(string(data))
+}
+
+func printJSONLine(value any) {
+	data, err := json.Marshal(value)
 	if err != nil {
 		fatal(err)
 	}

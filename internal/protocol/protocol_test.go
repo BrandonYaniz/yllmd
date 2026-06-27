@@ -40,7 +40,8 @@ func TestValidateGenerateAcceptsMessages(t *testing.T) {
 				{Role: "assistant", Content: "Hi."},
 			},
 		},
-		Queue: QueueOptions{Policy: "wait", TimeoutMS: 1000},
+		Queue:    QueueOptions{Policy: "wait", TimeoutMS: 1000},
+		Settings: GenerationSettings{Output: &Output{Format: "text", Delivery: "complete"}},
 	}
 	if err := req.ValidateGenerate(); err != nil {
 		t.Fatalf("ValidateGenerate returned error: %v", err)
@@ -120,6 +121,33 @@ func TestValidateGenerateRejectsInvalidRequests(t *testing.T) {
 				ID:    "req-1",
 				Input: &Input{Kind: "prompt", Prompt: "hello"},
 				Queue: QueueOptions{Policy: "drop"},
+			},
+		},
+		{
+			name: "bad legacy output format",
+			req: Request{
+				Type:         MessageGenerate,
+				ID:           "req-1",
+				Input:        &Input{Kind: "prompt", Prompt: "hello"},
+				OutputFormat: "xml",
+			},
+		},
+		{
+			name: "bad settings output format",
+			req: Request{
+				Type:     MessageGenerate,
+				ID:       "req-1",
+				Input:    &Input{Kind: "prompt", Prompt: "hello"},
+				Settings: GenerationSettings{Output: &Output{Format: "xml", Delivery: "stream"}},
+			},
+		},
+		{
+			name: "bad settings output delivery",
+			req: Request{
+				Type:     MessageGenerate,
+				ID:       "req-1",
+				Input:    &Input{Kind: "prompt", Prompt: "hello"},
+				Settings: GenerationSettings{Output: &Output{Format: "json", Delivery: "later"}},
 			},
 		},
 	}

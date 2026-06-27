@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,8 +47,9 @@ type generateJob struct {
 }
 
 type clientConn struct {
-	conn net.Conn
-	mu   sync.Mutex
+	conn      net.Conn
+	mu        sync.Mutex
+	closeOnce sync.Once
 }
 
 func NewServer(cfg config.Config, provider providers.Provider, logger *slog.Logger) *Server {
@@ -310,21 +313,21 @@ func (s *Server) isIdle() bool {
 
 func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
 	if err := req.ValidateGenerate(); err != nil {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		writeGenerateError(client, req, "invalid_request", err.Error())
 		return
 	}
 	if req.Provider == "" || req.Provider == "auto" {
 		req.Provider = s.cfg.Routing.DefaultProvider
 	}
 	if req.Provider != "local" {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "provider_not_implemented", Message: "remote providers are skeletoned but not implemented in v1"})
+		writeGenerateError(client, req, "provider_not_implemented", "remote providers are skeletoned but not implemented in v1")
 		return
 	}
 	if req.Model == "" {
 		req.Model = s.cfg.ModelLifecycle.ResidentModel
 	}
 	if _, err := s.models.Resolve(req.Model); err != nil {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
+		writeGenerateError(client, req, "model_unavailable", err.Error())
 		return
 	}
 	timeout := s.requestTimeout(req)
@@ -335,19 +338,19 @@ func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
 	if s.shutdown {
 		s.mu.Unlock()
 		cancel()
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "shutting_down", Message: "daemon is shutting down"})
+		writeGenerateError(client, req, "shutting_down", "daemon is shutting down")
 		return
 	}
 	if _, exists := s.active[req.ID]; exists {
 		s.mu.Unlock()
 		cancel()
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "duplicate_request", Message: "request id is already active"})
+		writeGenerateError(client, req, "duplicate_request", "request id is already active")
 		return
 	}
 	if _, exists := s.queued[req.ID]; exists {
 		s.mu.Unlock()
 		cancel()
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "duplicate_request", Message: "request id is already queued"})
+		writeGenerateError(client, req, "duplicate_request", "request id is already queued")
 		return
 	}
 	position := len(s.jobs) + 1
@@ -356,14 +359,16 @@ func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
 
 	select {
 	case s.jobs <- job:
-		_ = client.write(protocol.Event{Type: "accepted", ID: req.ID, QueuePosition: position})
+		if outputFormat(req) == "json" {
+			_ = client.write(protocol.Event{Type: "accepted", ID: req.ID, QueuePosition: position})
+		}
 	case <-ctx.Done():
 		s.removeQueued(req.ID)
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "queue_timeout", Message: "request timed out before entering queue"})
+		writeGenerateError(client, req, "queue_timeout", "request timed out before entering queue")
 	default:
 		s.removeQueued(req.ID)
 		cancel()
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "queue_full", Message: "request queue is full"})
+		writeGenerateError(client, req, "queue_full", "request queue is full")
 	}
 }
 
@@ -372,7 +377,7 @@ func (s *Server) worker() {
 		s.removeQueued(job.request.ID)
 		select {
 		case <-job.ctx.Done():
-			_ = job.client.write(protocol.Event{Type: "error", ID: job.request.ID, Code: "cancelled", Message: "request cancelled before start"})
+			writeGenerateError(job.client, job.request, "cancelled", "request cancelled before start")
 			continue
 		default:
 		}
@@ -383,11 +388,17 @@ func (s *Server) worker() {
 	}
 }
 
-func (s *Server) runJob(job *generateJob) {
-	stream := true
-	if job.request.Stream != nil {
-		stream = *job.request.Stream
+func writeGenerateError(client *clientConn, req protocol.Request, code, message string) {
+	if outputFormat(req) == "text" {
+		_ = client.writeRawString("error: " + message + "\n")
+		client.close()
+		return
 	}
+	_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: code, Message: message})
+}
+
+func (s *Server) runJob(job *generateJob) {
+	stream := outputDelivery(job.request) == "stream"
 	events, err := s.provider.Generate(job.ctx, providers.GenerateRequest{
 		ID:       job.request.ID,
 		Provider: "local",
@@ -397,7 +408,16 @@ func (s *Server) runJob(job *generateJob) {
 		Settings: job.request.Settings,
 	})
 	if err != nil {
+		if outputFormat(job.request) == "text" {
+			_ = job.client.writeRawString("error: " + err.Error() + "\n")
+			job.client.close()
+			return
+		}
 		_ = job.client.write(protocol.Event{Type: "error", ID: job.request.ID, Code: "provider_failed", Message: err.Error()})
+		return
+	}
+	if outputFormat(job.request) == "text" {
+		s.runTextJob(job, events, stream)
 		return
 	}
 	for {
@@ -415,6 +435,83 @@ func (s *Server) runJob(job *generateJob) {
 			}
 		}
 	}
+}
+
+func (s *Server) runTextJob(job *generateJob, events <-chan protocol.Event, stream bool) {
+	var text strings.Builder
+	defer job.client.close()
+	for {
+		select {
+		case <-job.ctx.Done():
+			_ = job.client.writeRawString("error: request cancelled\n")
+			return
+		case event, ok := <-events:
+			if !ok {
+				if !stream && text.Len() > 0 {
+					_ = job.client.writeRawString(text.String())
+				}
+				return
+			}
+			switch event.Type {
+			case "delta":
+				if stream {
+					if err := job.client.writeRawString(event.Text); err != nil {
+						job.cancel()
+						return
+					}
+				} else {
+					text.WriteString(event.Text)
+				}
+			case "completed":
+				if stream {
+					if event.Text != "" {
+						_ = job.client.writeRawString(event.Text)
+					}
+				} else if event.Text != "" {
+					_ = job.client.writeRawString(event.Text)
+				} else {
+					_ = job.client.writeRawString(text.String())
+				}
+				return
+			case "cancelled":
+				_ = job.client.writeRawString("cancelled\n")
+				return
+			case "error":
+				message := event.Message
+				if message == "" {
+					message = event.Code
+				}
+				_ = job.client.writeRawString("error: " + message + "\n")
+				return
+			}
+		}
+	}
+}
+
+func outputFormat(req protocol.Request) string {
+	if req.Settings.Output != nil {
+		if req.Settings.Output.Format == "text" || req.Settings.Output.Format == "raw" {
+			return "text"
+		}
+		return "json"
+	}
+	if req.OutputFormat == "text" || req.OutputFormat == "raw" {
+		return "text"
+	}
+	return "json"
+}
+
+func outputDelivery(req protocol.Request) string {
+	if req.Settings.Output != nil {
+		return req.Settings.Output.Delivery
+	}
+	if req.Settings.Stream != nil && !*req.Settings.Stream {
+		return "complete"
+	}
+	if req.Stream != nil && !*req.Stream {
+		return "complete"
+	}
+	return "stream"
 }
 
 func (s *Server) cancel(id string) bool {
@@ -535,6 +632,19 @@ func (c *clientConn) write(event protocol.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return protocol.WriteEvent(c.conn, event)
+}
+
+func (c *clientConn) writeRawString(text string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, err := io.WriteString(c.conn, text)
+	return err
+}
+
+func (c *clientConn) close() {
+	c.closeOnce.Do(func() {
+		_ = c.conn.Close()
+	})
 }
 
 func prepareSocket(path string) error {

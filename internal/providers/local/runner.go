@@ -33,12 +33,13 @@ type RunnerProvider struct {
 }
 
 type runnerSession struct {
-	modelName string
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	lines     <-chan lineResult
-	done      <-chan error
-	stdinMu   sync.Mutex
+	modelName   string
+	outputModes bool
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	lines       <-chan lineResult
+	done        <-chan error
+	stdinMu     sync.Mutex
 }
 
 type runnerEvent struct {
@@ -72,11 +73,17 @@ type runnerGenerateCommand struct {
 }
 
 type runnerGenerateSettings struct {
-	Temperature *float64 `json:"temperature,omitempty"`
-	TopP        *float64 `json:"top_p,omitempty"`
-	MaxTokens   *int     `json:"max_tokens,omitempty"`
-	Stream      bool     `json:"stream"`
-	Stop        []string `json:"stop,omitempty"`
+	Temperature *float64              `json:"temperature,omitempty"`
+	TopP        *float64              `json:"top_p,omitempty"`
+	MaxTokens   *int                  `json:"max_tokens,omitempty"`
+	Stream      bool                  `json:"stream"`
+	Stop        []string              `json:"stop,omitempty"`
+	Output      *runnerOutputSettings `json:"output,omitempty"`
+}
+
+type runnerOutputSettings struct {
+	Format   string `json:"format"`
+	Delivery string `json:"delivery"`
 }
 
 type runnerIDCommand struct {
@@ -134,16 +141,10 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 	defer close(cancelDone)
 
 	if err := session.write(runnerGenerateCommand{
-		Type:  "generate",
-		ID:    request.ID,
-		Input: request.Input,
-		Settings: runnerGenerateSettings{
-			Temperature: request.Settings.Temperature,
-			TopP:        request.Settings.TopP,
-			MaxTokens:   request.Settings.MaxTokens,
-			Stream:      request.Stream,
-			Stop:        request.Settings.Stop,
-		},
+		Type:     "generate",
+		ID:       request.ID,
+		Input:    request.Input,
+		Settings: runnerSettings(request, session.outputModes),
 	}); err != nil {
 		p.discardSession(ctx)
 		return fmt.Errorf("send runner generate: %w", err)
@@ -177,6 +178,30 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 			p.logger.Debug("ignoring unknown runner event", "type", event.Type)
 		}
 	}
+}
+
+func runnerDelivery(stream bool) string {
+	if stream {
+		return "stream"
+	}
+	return "complete"
+}
+
+func runnerSettings(request providers.GenerateRequest, outputModes bool) runnerGenerateSettings {
+	settings := runnerGenerateSettings{
+		Temperature: request.Settings.Temperature,
+		TopP:        request.Settings.TopP,
+		MaxTokens:   request.Settings.MaxTokens,
+		Stream:      request.Stream,
+		Stop:        request.Settings.Stop,
+	}
+	if outputModes {
+		settings.Output = &runnerOutputSettings{
+			Format:   "json",
+			Delivery: runnerDelivery(request.Stream),
+		}
+	}
+	return settings
 }
 
 func (p *RunnerProvider) Close(ctx context.Context) error {
@@ -293,6 +318,7 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 		_ = session.close(context.Background(), "shutdown-invalid-hello")
 		return nil, err
 	}
+	session.outputModes = hasCapability(hello.Capabilities, "output_modes")
 
 	if err := session.write(runnerConfigureCommand{
 		Type:          "configure",

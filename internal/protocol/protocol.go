@@ -19,19 +19,20 @@ const (
 )
 
 type Request struct {
-	Type     MessageType        `json:"type"`
-	ID       string             `json:"id"`
-	Action   string             `json:"action,omitempty"`
-	Provider string             `json:"provider,omitempty"`
-	Model    string             `json:"model,omitempty"`
-	Version  string             `json:"version,omitempty"`
-	File     string             `json:"file,omitempty"`
-	SHA256   string             `json:"sha256,omitempty"`
-	Activate *bool              `json:"activate,omitempty"`
-	Stream   *bool              `json:"stream,omitempty"`
-	Input    *Input             `json:"input,omitempty"`
-	Settings GenerationSettings `json:"settings,omitempty"`
-	Queue    QueueOptions       `json:"queue,omitempty"`
+	Type         MessageType        `json:"type"`
+	ID           string             `json:"id"`
+	Action       string             `json:"action,omitempty"`
+	Provider     string             `json:"provider,omitempty"`
+	Model        string             `json:"model,omitempty"`
+	Version      string             `json:"version,omitempty"`
+	File         string             `json:"file,omitempty"`
+	SHA256       string             `json:"sha256,omitempty"`
+	Activate     *bool              `json:"activate,omitempty"`
+	Stream       *bool              `json:"stream,omitempty"`
+	OutputFormat string             `json:"output_format,omitempty"`
+	Input        *Input             `json:"input,omitempty"`
+	Settings     GenerationSettings `json:"settings,omitempty"`
+	Queue        QueueOptions       `json:"queue,omitempty"`
 }
 
 type Input struct {
@@ -50,6 +51,13 @@ type GenerationSettings struct {
 	TopP        *float64 `json:"top_p,omitempty"`
 	MaxTokens   *int     `json:"max_tokens,omitempty"`
 	Stop        []string `json:"stop,omitempty"`
+	Stream      *bool    `json:"stream,omitempty"`
+	Output      *Output  `json:"output,omitempty"`
+}
+
+type Output struct {
+	Format   string `json:"format"`
+	Delivery string `json:"delivery"`
 }
 
 type QueueOptions struct {
@@ -244,11 +252,28 @@ func (r Request) ValidateGenerate() error {
 			return fmt.Errorf("stop[%d] must not be empty", i)
 		}
 	}
+	if r.Settings.Output != nil {
+		switch r.Settings.Output.Format {
+		case "json", "text", "raw":
+		default:
+			return fmt.Errorf("settings.output.format %q is not supported", r.Settings.Output.Format)
+		}
+		switch r.Settings.Output.Delivery {
+		case "stream", "complete":
+		default:
+			return fmt.Errorf("settings.output.delivery %q is not supported", r.Settings.Output.Delivery)
+		}
+	}
 	if r.Queue.Policy != "" && r.Queue.Policy != "wait" {
 		return fmt.Errorf("queue.policy %q is not supported", r.Queue.Policy)
 	}
 	if r.Queue.TimeoutMS < 0 {
 		return fmt.Errorf("queue.timeout_ms must not be negative")
+	}
+	switch r.OutputFormat {
+	case "", "json", "text", "raw":
+	default:
+		return fmt.Errorf("output_format %q is not supported", r.OutputFormat)
 	}
 	return nil
 }
