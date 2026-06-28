@@ -48,6 +48,8 @@ local_models:
 
 If only one local model is configured, all local model requests may use that model depending on `unavailable_tier_policy`.
 
+`yllama-runner` is started with the configured `model_path`, `runtime.context_tokens`, and `runtime.threads` values. Generation settings such as `max_tokens`, `temperature`, and `top_p` are passed as runner startup flags for each effective resident session.
+
 ## Remote providers
 
 Remote provider configuration is reserved for future releases. Remote generation is not implemented in the current local-only release surface, and `routing.default_provider` must be `local`.

@@ -2,13 +2,15 @@ package local
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +21,15 @@ import (
 	"github.com/BrandonYaniz/yllmd/internal/providers"
 )
 
-const runnerProtocolVersion = 1
+const (
+	runnerFrameChunk byte = 0x01
+	runnerFrameDone  byte = 0x02
+	runnerFrameError byte = 0x03
+
+	defaultRunnerMaxTokens   = 128
+	defaultRunnerTemperature = 0.8
+	defaultRunnerTopP        = 0.95
+)
 
 type RunnerProvider struct {
 	cfg      config.Config
@@ -33,62 +43,26 @@ type RunnerProvider struct {
 }
 
 type runnerSession struct {
-	modelName   string
-	outputModes bool
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	lines       <-chan lineResult
-	done        <-chan error
-	stdinMu     sync.Mutex
+	modelName string
+	options   runnerOptions
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	frames    <-chan frameResult
+	done      <-chan error
+	stdinMu   sync.Mutex
+	closeMu   sync.Mutex
+	closed    bool
 }
 
-type runnerEvent struct {
-	Type            string          `json:"type"`
-	ID              string          `json:"id"`
-	ProtocolVersion int             `json:"protocol_version"`
-	Runner          string          `json:"runner"`
-	Capabilities    []string        `json:"capabilities"`
-	ModelPath       string          `json:"model_path"`
-	ContextTokens   int             `json:"context_tokens"`
-	Text            string          `json:"text"`
-	FinishReason    string          `json:"finish_reason"`
-	Usage           *protocol.Usage `json:"usage"`
-	Code            string          `json:"code"`
-	Message         string          `json:"message"`
+type runnerOptions struct {
+	temperature float64
+	topP        float64
+	maxTokens   int
 }
 
-type runnerConfigureCommand struct {
-	Type          string `json:"type"`
-	ID            string `json:"id"`
-	ModelPath     string `json:"model_path"`
-	ContextTokens int    `json:"context_tokens"`
-	Threads       int    `json:"threads"`
-}
-
-type runnerGenerateCommand struct {
-	Type     string                 `json:"type"`
-	ID       string                 `json:"id"`
-	Input    protocol.Input         `json:"input"`
-	Settings runnerGenerateSettings `json:"settings"`
-}
-
-type runnerGenerateSettings struct {
-	Temperature *float64              `json:"temperature,omitempty"`
-	TopP        *float64              `json:"top_p,omitempty"`
-	MaxTokens   *int                  `json:"max_tokens,omitempty"`
-	Stream      bool                  `json:"stream"`
-	Stop        []string              `json:"stop,omitempty"`
-	Output      *runnerOutputSettings `json:"output,omitempty"`
-}
-
-type runnerOutputSettings struct {
-	Format   string `json:"format"`
-	Delivery string `json:"delivery"`
-}
-
-type runnerIDCommand struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
+type runnerFrame struct {
+	tag     byte
+	payload []byte
 }
 
 func NewRunnerProvider(cfg config.Config, logger *slog.Logger) *RunnerProvider {
@@ -124,7 +98,8 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 	epoch := p.epoch
 	p.stopCooldownLocked()
 
-	session, err := p.sessionFor(ctx, model, "configure-"+request.ID)
+	options := effectiveRunnerOptions(request.Settings)
+	session, err := p.sessionFor(ctx, model, options)
 	if err != nil {
 		return err
 	}
@@ -134,74 +109,152 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = session.write(runnerIDCommand{Type: "cancel", ID: request.ID})
+			_ = session.close(context.Background(), "cancel")
 		case <-cancelDone:
 		}
 	}()
 	defer close(cancelDone)
 
-	if err := session.write(runnerGenerateCommand{
-		Type:     "generate",
-		ID:       request.ID,
-		Input:    request.Input,
-		Settings: runnerSettings(request, session.outputModes),
-	}); err != nil {
-		p.discardSession(ctx)
-		return fmt.Errorf("send runner generate: %w", err)
+	if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: model.Name}) {
+		return nil
 	}
 
+	if err := session.writePrompt(runnerPrompt(request.Input)); err != nil {
+		p.discardSession(ctx)
+		return fmt.Errorf("send runner prompt: %w", err)
+	}
+
+	stopFilter := newRunnerStopFilter(request.Settings.Stop)
+	var completed strings.Builder
 	for {
-		event, err := session.readEvent(ctx)
+		frame, err := session.readFrame(ctx)
 		if err != nil {
 			p.discardSession(ctx)
 			return err
 		}
-		switch event.Type {
-		case "started":
-			if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: model.Name}) {
+		switch frame.tag {
+		case runnerFrameChunk:
+			text := string(frame.payload)
+			emit, stopped := stopFilter.push(text)
+			if emit != "" {
+				completed.WriteString(emit)
+				if request.Stream && !sendRunnerEvent(ctx, events, protocol.Event{Type: "delta", ID: request.ID, Text: emit}) {
+					return nil
+				}
+			}
+			if stopped {
+				p.discardSession(context.Background())
+				_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "completed", ID: request.ID, FinishReason: "stop", Text: completed.String()})
 				return nil
 			}
-		case "delta":
-			if !sendRunnerEvent(ctx, events, protocol.Event{Type: "delta", ID: request.ID, Text: event.Text}) {
-				return nil
+		case runnerFrameDone:
+			if emit := stopFilter.flush(); emit != "" {
+				completed.WriteString(emit)
+				if request.Stream && !sendRunnerEvent(ctx, events, protocol.Event{Type: "delta", ID: request.ID, Text: emit}) {
+					return nil
+				}
 			}
-		case "completed":
-			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "completed", ID: request.ID, FinishReason: event.FinishReason, Usage: event.Usage, Text: event.Text})
+			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "completed", ID: request.ID, FinishReason: "stop", Text: completed.String()})
 			return nil
-		case "cancelled":
-			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "cancelled", ID: request.ID})
-			return nil
-		case "error":
-			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "error", ID: request.ID, Code: event.Code, Message: event.Message})
+		case runnerFrameError:
+			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "error", ID: request.ID, Code: "runner_error", Message: string(frame.payload)})
 			return nil
 		default:
-			p.logger.Debug("ignoring unknown runner event", "type", event.Type)
+			p.discardSession(ctx)
+			return fmt.Errorf("unknown runner frame tag 0x%02x", frame.tag)
 		}
 	}
 }
 
-func runnerDelivery(stream bool) string {
-	if stream {
-		return "stream"
+func effectiveRunnerOptions(settings protocol.GenerationSettings) runnerOptions {
+	options := runnerOptions{
+		temperature: defaultRunnerTemperature,
+		topP:        defaultRunnerTopP,
+		maxTokens:   defaultRunnerMaxTokens,
 	}
-	return "complete"
+	if settings.Temperature != nil {
+		options.temperature = *settings.Temperature
+	}
+	if settings.TopP != nil {
+		options.topP = *settings.TopP
+	}
+	if settings.MaxTokens != nil {
+		options.maxTokens = *settings.MaxTokens
+	}
+	return options
 }
 
-func runnerSettings(request providers.GenerateRequest, outputModes bool) runnerGenerateSettings {
-	settings := runnerGenerateSettings{
-		Temperature: request.Settings.Temperature,
-		TopP:        request.Settings.TopP,
-		MaxTokens:   request.Settings.MaxTokens,
-		Stream:      request.Stream,
-		Stop:        request.Settings.Stop,
+func runnerPrompt(input protocol.Input) string {
+	if input.Kind == "prompt" {
+		return input.Prompt
 	}
-	if outputModes {
-		settings.Output = &runnerOutputSettings{
-			Format:   "json",
-			Delivery: runnerDelivery(request.Stream),
+	var prompt strings.Builder
+	for _, message := range input.Messages {
+		if prompt.Len() > 0 {
+			prompt.WriteByte('\n')
+		}
+		prompt.WriteString(message.Role)
+		prompt.WriteString(": ")
+		prompt.WriteString(message.Content)
+	}
+	return prompt.String()
+}
+
+type runnerStopFilter struct {
+	stops      []string
+	maxKeep    int
+	pending    string
+	terminated bool
+}
+
+func newRunnerStopFilter(stops []string) *runnerStopFilter {
+	filter := &runnerStopFilter{stops: stops}
+	for _, stop := range stops {
+		if len(stop) > filter.maxKeep {
+			filter.maxKeep = len(stop) - 1
 		}
 	}
-	return settings
+	return filter
+}
+
+func (f *runnerStopFilter) push(text string) (string, bool) {
+	if len(f.stops) == 0 || f.terminated {
+		return text, f.terminated
+	}
+	f.pending += text
+	if index := f.firstStopIndex(); index >= 0 {
+		f.terminated = true
+		emit := f.pending[:index]
+		f.pending = ""
+		return emit, true
+	}
+	if len(f.pending) <= f.maxKeep {
+		return "", false
+	}
+	emitLen := len(f.pending) - f.maxKeep
+	emit := f.pending[:emitLen]
+	f.pending = f.pending[emitLen:]
+	return emit, false
+}
+
+func (f *runnerStopFilter) flush() string {
+	if len(f.stops) == 0 || f.terminated {
+		return ""
+	}
+	emit := f.pending
+	f.pending = ""
+	return emit
+}
+
+func (f *runnerStopFilter) firstStopIndex() int {
+	first := -1
+	for _, stop := range f.stops {
+		index := strings.Index(f.pending, stop)
+		if index >= 0 && (first == -1 || index < first) {
+			first = index
+		}
+	}
+	return first
 }
 
 func (p *RunnerProvider) Close(ctx context.Context) error {
@@ -249,7 +302,11 @@ func (p *RunnerProvider) scheduleCooldownLocked(modelName string, epoch uint64) 
 			p.logger.Debug("runner shutdown during idle cooldown failed", "model", p.session.modelName, "error", err)
 		}
 		p.session = nil
-		session, err := p.startSession(ctx, resident, "configure-idle-resident")
+		session, err := p.startSession(ctx, resident, runnerOptions{
+			temperature: defaultRunnerTemperature,
+			topP:        defaultRunnerTopP,
+			maxTokens:   defaultRunnerMaxTokens,
+		})
 		if err != nil {
 			p.logger.Debug("resident model reload after cooldown failed", "model", resident.Name, "error", err)
 			return
@@ -258,8 +315,8 @@ func (p *RunnerProvider) scheduleCooldownLocked(modelName string, epoch uint64) 
 	})
 }
 
-func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel, configureID string) (*runnerSession, error) {
-	if p.session != nil && p.session.modelName == model.Name {
+func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel, options runnerOptions) (*runnerSession, error) {
+	if p.session != nil && p.session.modelName == model.Name && p.session.options == options {
 		return p.session, nil
 	}
 	if p.session != nil {
@@ -268,7 +325,7 @@ func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel
 		}
 		p.session = nil
 	}
-	session, err := p.startSession(ctx, model, configureID)
+	session, err := p.startSession(ctx, model, options)
 	if err != nil {
 		return nil, err
 	}
@@ -276,8 +333,15 @@ func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel
 	return session, nil
 }
 
-func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalModel, configureID string) (*runnerSession, error) {
-	cmd := exec.Command(model.Config.Backend.Command)
+func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalModel, options runnerOptions) (*runnerSession, error) {
+	cmd := exec.Command(model.Config.Backend.Command,
+		"--model", model.ModelPath,
+		"--ctx", strconv.Itoa(model.Config.Runtime.ContextTokens),
+		"--threads", strconv.Itoa(model.Config.Runtime.Threads),
+		"--max-tokens", strconv.Itoa(options.maxTokens),
+		"--temperature", strconv.FormatFloat(options.temperature, 'f', -1, 64),
+		"--top-p", strconv.FormatFloat(options.topP, 'f', -1, 64),
+	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("open runner stdin: %w", err)
@@ -294,7 +358,7 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 		return nil, fmt.Errorf("start runner: %w", err)
 	}
 
-	lines := readRunnerLines(stdout)
+	frames := readRunnerFrames(stdout)
 	go p.logRunnerStderr(stderr, model.Name)
 
 	done := make(chan error, 1)
@@ -303,36 +367,11 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 	}()
 	session := &runnerSession{
 		modelName: model.Name,
+		options:   options,
 		cmd:       cmd,
 		stdin:     stdin,
-		lines:     lines,
+		frames:    frames,
 		done:      done,
-	}
-
-	hello, err := session.readEvent(ctx)
-	if err != nil {
-		_ = session.close(context.Background(), "shutdown-start-failed")
-		return nil, err
-	}
-	if err := validateHello(hello); err != nil {
-		_ = session.close(context.Background(), "shutdown-invalid-hello")
-		return nil, err
-	}
-	session.outputModes = hasCapability(hello.Capabilities, "output_modes")
-
-	if err := session.write(runnerConfigureCommand{
-		Type:          "configure",
-		ID:            configureID,
-		ModelPath:     model.ModelPath,
-		ContextTokens: model.Config.Runtime.ContextTokens,
-		Threads:       model.Config.Runtime.Threads,
-	}); err != nil {
-		_ = session.close(context.Background(), "shutdown-configure-failed")
-		return nil, fmt.Errorf("send runner configure: %w", err)
-	}
-	if err := waitForReady(ctx, session, configureID); err != nil {
-		_ = session.close(context.Background(), "shutdown-not-ready")
-		return nil, err
 	}
 	return session, nil
 }
@@ -345,16 +384,22 @@ func (p *RunnerProvider) discardSession(ctx context.Context) {
 	p.session = nil
 }
 
-func (s *runnerSession) write(command any) error {
-	return writeRunnerCommand(&s.stdinMu, s.stdin, command)
+func (s *runnerSession) writePrompt(prompt string) error {
+	return writeRunnerPrompt(&s.stdinMu, s.stdin, prompt)
 }
 
-func (s *runnerSession) readEvent(ctx context.Context) (runnerEvent, error) {
-	return readRunnerEvent(ctx, s.lines)
+func (s *runnerSession) readFrame(ctx context.Context) (runnerFrame, error) {
+	return readRunnerFrame(ctx, s.frames)
 }
 
-func (s *runnerSession) close(ctx context.Context, id string) error {
-	_ = s.write(runnerIDCommand{Type: "shutdown", ID: id})
+func (s *runnerSession) close(ctx context.Context, _ string) error {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+
 	_ = s.stdin.Close()
 	select {
 	case err := <-s.done:
@@ -373,104 +418,104 @@ func (s *runnerSession) close(ctx context.Context, id string) error {
 	}
 }
 
-func readRunnerLines(stdout io.Reader) <-chan lineResult {
-	lines := make(chan lineResult)
+func readRunnerFrames(stdout io.Reader) <-chan frameResult {
+	frames := make(chan frameResult, 1)
 	go func() {
-		defer close(lines)
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-		for scanner.Scan() {
-			line := append([]byte(nil), scanner.Bytes()...)
-			lines <- lineResult{line: line}
-		}
-		if err := scanner.Err(); err != nil {
-			lines <- lineResult{err: err}
+		defer close(frames)
+		for {
+			frame, err := readBinaryRunnerFrame(stdout)
+			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					frames <- frameResult{err: err}
+				}
+				return
+			}
+			frames <- frameResult{frame: frame}
 		}
 	}()
-	return lines
+	return frames
 }
 
-type lineResult struct {
-	line []byte
-	err  error
+type frameResult struct {
+	frame runnerFrame
+	err   error
 }
 
-func readRunnerEvent(ctx context.Context, lines <-chan lineResult) (runnerEvent, error) {
+func readBinaryRunnerFrame(stdout io.Reader) (runnerFrame, error) {
+	var tag [1]byte
+	if _, err := io.ReadFull(stdout, tag[:]); err != nil {
+		return runnerFrame{}, err
+	}
+	switch tag[0] {
+	case runnerFrameChunk:
+		payload, err := readSizedPayload(stdout, 4)
+		if err != nil {
+			return runnerFrame{}, err
+		}
+		return runnerFrame{tag: tag[0], payload: payload}, nil
+	case runnerFrameDone:
+		return runnerFrame{tag: tag[0]}, nil
+	case runnerFrameError:
+		payload, err := readSizedPayload(stdout, 2)
+		if err != nil {
+			return runnerFrame{}, err
+		}
+		return runnerFrame{tag: tag[0], payload: payload}, nil
+	default:
+		return runnerFrame{}, fmt.Errorf("unknown runner frame tag 0x%02x", tag[0])
+	}
+}
+
+func readSizedPayload(stdout io.Reader, lengthBytes int) ([]byte, error) {
+	header := make([]byte, lengthBytes)
+	if _, err := io.ReadFull(stdout, header); err != nil {
+		return nil, err
+	}
+	var length uint32
+	switch lengthBytes {
+	case 2:
+		length = uint32(binary.LittleEndian.Uint16(header))
+	case 4:
+		length = binary.LittleEndian.Uint32(header)
+	default:
+		return nil, fmt.Errorf("unsupported runner payload length size %d", lengthBytes)
+	}
+	payload := make([]byte, length)
+	if length > 0 {
+		if _, err := io.ReadFull(stdout, payload); err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
+}
+
+func readRunnerFrame(ctx context.Context, frames <-chan frameResult) (runnerFrame, error) {
 	select {
 	case <-ctx.Done():
-		return runnerEvent{}, ctx.Err()
-	case result, ok := <-lines:
+		return runnerFrame{}, ctx.Err()
+	case result, ok := <-frames:
 		if !ok {
-			return runnerEvent{}, errors.New("runner stdout closed")
+			return runnerFrame{}, errors.New("runner stdout closed")
 		}
 		if result.err != nil {
-			return runnerEvent{}, result.err
+			return runnerFrame{}, result.err
 		}
-		var event runnerEvent
-		if err := json.Unmarshal(result.line, &event); err != nil {
-			return runnerEvent{}, fmt.Errorf("decode runner event: %w", err)
-		}
-		return event, nil
+		return result.frame, nil
 	}
 }
 
-func validateHello(event runnerEvent) error {
-	if event.Type != "hello" {
-		return fmt.Errorf("expected runner hello event, got %q", event.Type)
+func writeRunnerPrompt(mu *sync.Mutex, stdin io.Writer, prompt string) error {
+	if uint64(len(prompt)) > uint64(^uint32(0)) {
+		return fmt.Errorf("runner prompt too large")
 	}
-	if event.ProtocolVersion != runnerProtocolVersion {
-		return fmt.Errorf("unsupported runner protocol version %d", event.ProtocolVersion)
-	}
-	if event.Runner != "" && event.Runner != "yllama-runner" {
-		return fmt.Errorf("unsupported runner %q", event.Runner)
-	}
-	for _, required := range []string{"generate", "stream", "cancel"} {
-		if !hasCapability(event.Capabilities, required) {
-			return fmt.Errorf("runner missing required capability %q", required)
-		}
-	}
-	return nil
-}
-
-func hasCapability(capabilities []string, required string) bool {
-	for _, capability := range capabilities {
-		if capability == required {
-			return true
-		}
-	}
-	return false
-}
-
-type runnerEventReader interface {
-	readEvent(ctx context.Context) (runnerEvent, error)
-}
-
-func waitForReady(ctx context.Context, reader runnerEventReader, id string) error {
-	for {
-		event, err := reader.readEvent(ctx)
-		if err != nil {
-			return err
-		}
-		switch event.Type {
-		case "ready":
-			if event.ID == id {
-				return nil
-			}
-		case "error":
-			return fmt.Errorf("runner configure failed: %s: %s", event.Code, event.Message)
-		}
-	}
-}
-
-func writeRunnerCommand(mu *sync.Mutex, stdin io.Writer, command any) error {
-	data, err := json.Marshal(command)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
+	var frame bytes.Buffer
+	var length [4]byte
+	binary.LittleEndian.PutUint32(length[:], uint32(len(prompt)))
+	frame.Write(length[:])
+	frame.WriteString(prompt)
 	mu.Lock()
 	defer mu.Unlock()
-	_, err = stdin.Write(data)
+	_, err := stdin.Write(frame.Bytes())
 	return err
 }
 

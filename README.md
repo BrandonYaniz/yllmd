@@ -33,7 +33,7 @@ client applications
   -> local runner
 ```
 
-Local inference is handled by an external runner process, such as `yllama-runner`, over stdio JSON Lines.
+Local inference is handled by an external runner process, such as `yllama-runner`, over binary stdio frames.
 
 ## Status
 
@@ -43,7 +43,7 @@ Implemented:
 
 - Unix domain socket server using JSON Lines.
 - FIFO request queueing and cancellation.
-- Local runner process integration over stdio JSON Lines.
+- Local runner process integration over binary stdio frames.
 - Health, status, providers, generation, model list, model versions, model install, model activate, and rollback commands through `yllmctl`.
 - Local model version activation through a `current` symlink.
 

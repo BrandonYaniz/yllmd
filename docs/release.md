@@ -19,7 +19,7 @@ Included:
 
 - `yllmd` daemon over a Unix domain socket.
 - `yllmctl` health, status, generation, cancel, model list, model install, and model rollback commands.
-- Local runner integration over stdio JSON Lines.
+- Local runner integration over binary stdio frames.
 - Local model version activation and rollback.
 
 Excluded:
