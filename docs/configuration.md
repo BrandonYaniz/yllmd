@@ -42,9 +42,12 @@ Requests are processed first in, first out. Future versions may add priority que
 local_models:
   fast:
     catalog_id: qwen2_5_1_5b_instruct_q4
+    model_type: llm
     tier: fast
     resident: true
 ```
+
+`model_type` selects the workload family for the model. The current release accepts `llm` and `code`; future releases may add other families such as image, audio, or video. `tier` is the model level and should use `fast`, `balanced`, or `deep` for the standard local routing surface.
 
 If only one local model is configured, all local model requests may use that model depending on `unavailable_tier_policy`.
 

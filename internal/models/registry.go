@@ -13,6 +13,7 @@ type Registry struct {
 	cfg          config.Config
 	byName       map[string]LocalModel
 	byTier       map[string]LocalModel
+	byTypeLevel  map[string]map[string]LocalModel
 	orderedNames []string
 }
 
@@ -25,9 +26,10 @@ type LocalModel struct {
 
 func NewRegistry(cfg config.Config) Registry {
 	registry := Registry{
-		cfg:    cfg,
-		byName: make(map[string]LocalModel, len(cfg.LocalModels)),
-		byTier: make(map[string]LocalModel, len(cfg.LocalModels)),
+		cfg:         cfg,
+		byName:      make(map[string]LocalModel, len(cfg.LocalModels)),
+		byTier:      make(map[string]LocalModel, len(cfg.LocalModels)),
+		byTypeLevel: make(map[string]map[string]LocalModel, len(cfg.LocalModels)),
 	}
 	for name, model := range cfg.LocalModels {
 		local := LocalModel{
@@ -39,6 +41,13 @@ func NewRegistry(cfg config.Config) Registry {
 		registry.byName[name] = local
 		if _, exists := registry.byTier[model.Tier]; !exists {
 			registry.byTier[model.Tier] = local
+		}
+		modelType := modelTypeFor(model)
+		if registry.byTypeLevel[modelType] == nil {
+			registry.byTypeLevel[modelType] = make(map[string]LocalModel)
+		}
+		if _, exists := registry.byTypeLevel[modelType][model.Tier]; !exists {
+			registry.byTypeLevel[modelType][model.Tier] = local
 		}
 		registry.orderedNames = append(registry.orderedNames, name)
 	}
@@ -57,6 +66,21 @@ func (r Registry) Resolve(nameOrTier string) (LocalModel, error) {
 		return model, nil
 	}
 	return LocalModel{}, fmt.Errorf("local model %q is not configured", nameOrTier)
+}
+
+func (r Registry) ResolveRequest(nameOrTier, modelType, level string) (LocalModel, error) {
+	if level != "" {
+		if modelType == "" {
+			modelType = "llm"
+		}
+		if modelsByLevel, ok := r.byTypeLevel[modelType]; ok {
+			if model, ok := modelsByLevel[level]; ok {
+				return model, nil
+			}
+		}
+		return LocalModel{}, fmt.Errorf("local %s model level %q is not configured", modelType, level)
+	}
+	return r.Resolve(nameOrTier)
 }
 
 func (r Registry) Resident() (LocalModel, error) {
@@ -79,10 +103,13 @@ func ResolveModelPath(cfg config.Config, name string, model config.LocalModelCon
 }
 
 func descriptorFor(cfg config.Config, name string, model config.LocalModelConfig) protocol.ModelDescriptor {
+	modelType := modelTypeFor(model)
 	return protocol.ModelDescriptor{
 		ID:          protocol.ModelID{Provider: "local", Name: name},
 		Name:        name,
 		DisplayName: name,
+		ModelType:   modelType,
+		Level:       model.Tier,
 		Tier:        model.Tier,
 		Resident:    model.Resident || cfg.ModelLifecycle.ResidentModel == name,
 		Capabilities: protocol.ModelCapabilities{
@@ -95,4 +122,11 @@ func descriptorFor(cfg config.Config, name string, model config.LocalModelConfig
 			"model_path": ResolveModelPath(cfg, name, model),
 		},
 	}
+}
+
+func modelTypeFor(model config.LocalModelConfig) string {
+	if model.ModelType == "" {
+		return "llm"
+	}
+	return model.ModelType
 }

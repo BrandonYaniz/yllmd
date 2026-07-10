@@ -7,7 +7,7 @@ The daemon does not expose HTTP or HTTPS.
 ## Generate request
 
 ```json
-{"type":"generate","id":"req-001","provider":"local","model":"balanced","input":{"kind":"messages","messages":[{"role":"system","content":"Answer clearly."},{"role":"user","content":"Summarize this."}]},"settings":{"temperature":0.2,"max_tokens":800,"output":{"format":"json","delivery":"stream"}},"queue":{"policy":"wait","timeout_ms":60000}}
+{"type":"generate","id":"req-001","provider":"local","model_type":"llm","level":"balanced","input":{"kind":"messages","messages":[{"role":"system","content":"Answer clearly."},{"role":"user","content":"Summarize this."}]},"settings":{"temperature":0.2,"max_tokens":800,"output":{"format":"json","delivery":"stream"}},"queue":{"policy":"wait","timeout_ms":60000}}
 ```
 
 Generate requests support two independent output options:
@@ -76,13 +76,18 @@ Text responses are one-shot raw responses for generate requests. The daemon clos
 
 ## Model names
 
-Clients may request abstract model tiers:
+Clients may request a model by type and level. Supported model types for the current release are:
+
+- `llm`
+- `code`
+
+Supported model levels are:
 
 - `fast`
 - `balanced`
 - `deep`
 
-Clients may also request configured provider-specific aliases when enabled by configuration.
+If `model_type` is omitted, it defaults to `llm`. The legacy `model` field is still accepted for configured model names, tiers, and aliases.
 
 ## Provider names
 

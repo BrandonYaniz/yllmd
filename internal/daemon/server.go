@@ -323,13 +323,15 @@ func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
 		writeGenerateError(client, req, "provider_not_implemented", "remote providers are skeletoned but not implemented in v1")
 		return
 	}
-	if req.Model == "" {
+	if req.Model == "" && req.Level == "" {
 		req.Model = s.cfg.ModelLifecycle.ResidentModel
 	}
-	if _, err := s.models.Resolve(req.Model); err != nil {
+	model, err := s.models.ResolveRequest(req.Model, req.ModelType, req.Level)
+	if err != nil {
 		writeGenerateError(client, req, "model_unavailable", err.Error())
 		return
 	}
+	req.Model = model.Name
 	timeout := s.requestTimeout(req)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	job := &generateJob{request: req, client: client, ctx: ctx, cancel: cancel}
@@ -400,12 +402,14 @@ func writeGenerateError(client *clientConn, req protocol.Request, code, message 
 func (s *Server) runJob(job *generateJob) {
 	stream := outputDelivery(job.request) == "stream"
 	events, err := s.provider.Generate(job.ctx, providers.GenerateRequest{
-		ID:       job.request.ID,
-		Provider: "local",
-		Model:    job.request.Model,
-		Stream:   stream,
-		Input:    *job.request.Input,
-		Settings: job.request.Settings,
+		ID:        job.request.ID,
+		Provider:  "local",
+		Model:     job.request.Model,
+		ModelType: job.request.ModelType,
+		Level:     job.request.Level,
+		Stream:    stream,
+		Input:     *job.request.Input,
+		Settings:  job.request.Settings,
 	})
 	if err != nil {
 		if outputFormat(job.request) == "text" {

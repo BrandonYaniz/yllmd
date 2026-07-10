@@ -56,6 +56,7 @@ type UpdatesConfig struct {
 
 type LocalModelConfig struct {
 	CatalogID string               `yaml:"catalog_id"`
+	ModelType string               `yaml:"model_type"`
 	ModelPath string               `yaml:"model_path"`
 	Tier      string               `yaml:"tier"`
 	Resident  bool                 `yaml:"resident"`
@@ -139,6 +140,9 @@ func (c Config) Validate() error {
 		}
 	}
 	for name, model := range c.LocalModels {
+		if model.ModelType != "" && !supportedModelType(model.ModelType) {
+			errs = append(errs, fmt.Errorf("local_models.%s.model_type %q is not supported", name, model.ModelType))
+		}
 		if model.Tier == "" {
 			errs = append(errs, fmt.Errorf("local_models.%s.tier is required", name))
 		}
@@ -170,6 +174,15 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("v1 requires routing.default_provider to be local"))
 	}
 	return errors.Join(errs...)
+}
+
+func supportedModelType(modelType string) bool {
+	switch modelType {
+	case "llm", "code":
+		return true
+	default:
+		return false
+	}
 }
 
 func supportedUpdatePolicy(policy string) bool {

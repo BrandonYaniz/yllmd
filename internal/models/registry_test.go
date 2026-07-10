@@ -26,6 +26,33 @@ func TestRegistryResolvesByNameAndTier(t *testing.T) {
 	}
 }
 
+func TestRegistryResolvesByModelTypeAndLevel(t *testing.T) {
+	cfg := testConfig()
+	cfg.LocalModels["code-balanced"] = config.LocalModelConfig{
+		ModelType: "code",
+		CatalogID: "code-balanced-catalog",
+		Tier:      "balanced",
+		Runtime:   config.LocalRuntimeSettings{ContextTokens: 4096, Threads: 4},
+	}
+	registry := NewRegistry(cfg)
+
+	llm, err := registry.ResolveRequest("", "llm", "balanced")
+	if err != nil {
+		t.Fatalf("resolve llm balanced: %v", err)
+	}
+	if llm.Name != "balanced-model" {
+		t.Fatalf("llm balanced resolved to %q", llm.Name)
+	}
+
+	code, err := registry.ResolveRequest("", "code", "balanced")
+	if err != nil {
+		t.Fatalf("resolve code balanced: %v", err)
+	}
+	if code.Name != "code-balanced" {
+		t.Fatalf("code balanced resolved to %q", code.Name)
+	}
+}
+
 func TestRegistryDescriptorsAreStable(t *testing.T) {
 	descriptors := NewRegistry(testConfig()).Descriptors()
 	if len(descriptors) != 2 {
@@ -39,6 +66,9 @@ func TestRegistryDescriptorsAreStable(t *testing.T) {
 	}
 	if !descriptors[1].Resident {
 		t.Fatal("expected fast to be resident")
+	}
+	if descriptors[1].ModelType != "llm" || descriptors[1].Level != "fast" {
+		t.Fatalf("unexpected descriptor routing fields: %#v", descriptors[1])
 	}
 }
 

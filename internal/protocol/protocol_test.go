@@ -7,7 +7,7 @@ import (
 )
 
 func TestDecodeGenerateRequest(t *testing.T) {
-	req, err := DecodeRequest([]byte(`{"type":"generate","id":"req-1","provider":"local","model":"fast","input":{"kind":"prompt","prompt":"hello"},"settings":{"max_tokens":12}}`))
+	req, err := DecodeRequest([]byte(`{"type":"generate","id":"req-1","provider":"local","model_type":"code","level":"balanced","input":{"kind":"prompt","prompt":"hello"},"settings":{"max_tokens":12}}`))
 	if err != nil {
 		t.Fatalf("DecodeRequest returned error: %v", err)
 	}
@@ -19,6 +19,9 @@ func TestDecodeGenerateRequest(t *testing.T) {
 	}
 	if req.Settings.MaxTokens == nil || *req.Settings.MaxTokens != 12 {
 		t.Fatalf("unexpected max tokens: %#v", req.Settings.MaxTokens)
+	}
+	if req.ModelType != "code" || req.Level != "balanced" {
+		t.Fatalf("unexpected routing fields: model_type=%q level=%q", req.ModelType, req.Level)
 	}
 }
 
@@ -150,6 +153,15 @@ func TestValidateGenerateRejectsInvalidRequests(t *testing.T) {
 				Settings: GenerationSettings{Output: &Output{Format: "json", Delivery: "later"}},
 			},
 		},
+		{
+			name: "bad model type",
+			req: Request{
+				Type:      MessageGenerate,
+				ID:        "req-1",
+				ModelType: "image",
+				Input:     &Input{Kind: "prompt", Prompt: "hello"},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -271,6 +283,8 @@ func TestWriteModelsEvent(t *testing.T) {
 				ID:          ModelID{Provider: "local", Name: "fast"},
 				Name:        "fast",
 				DisplayName: "fast",
+				ModelType:   "llm",
+				Level:       "fast",
 				Tier:        "fast",
 				Resident:    true,
 				Capabilities: ModelCapabilities{

@@ -28,6 +28,7 @@ updates:
 local_models:
   fast:
     catalog_id: qwen2_5_1_5b_instruct_q4
+    model_type: llm
     tier: fast
     resident: true
     backend:
@@ -40,6 +41,7 @@ local_models:
 
   balanced:
     catalog_id: qwen2_5_7b_instruct_q4
+    model_type: llm
     tier: balanced
     resident: false
     backend:
@@ -52,6 +54,7 @@ local_models:
 
   deep:
     catalog_id: qwen2_5_14b_instruct_q4
+    model_type: llm
     tier: deep
     resident: false
     backend:

@@ -77,7 +77,7 @@ func (p *RunnerProvider) ID() string {
 }
 
 func (p *RunnerProvider) Generate(ctx context.Context, request providers.GenerateRequest) (<-chan protocol.Event, error) {
-	model, err := p.registry.Resolve(request.Model)
+	model, err := p.registry.ResolveRequest(request.Model, request.ModelType, request.Level)
 	if err != nil {
 		return nil, err
 	}

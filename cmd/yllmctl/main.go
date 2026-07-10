@@ -239,7 +239,9 @@ func runCancel(socketPath string, args []string) {
 
 func runGenerate(socketPath string, args []string) {
 	generateFlags := flag.NewFlagSet("generate", flag.ExitOnError)
-	model := generateFlags.String("model", "fast", "model tier or alias")
+	model := generateFlags.String("model", "", "model name, tier, or alias")
+	modelType := generateFlags.String("model-type", "", "model type: llm or code")
+	level := generateFlags.String("level", "", "model level: fast, balanced, or deep")
 	prompt := generateFlags.String("prompt", "", "prompt text")
 	stream := generateFlags.Bool("stream", true, "stream text deltas")
 	output := generateFlags.String("output", "json", "output format: json or text")
@@ -269,11 +271,13 @@ func runGenerate(socketPath string, args []string) {
 
 	id := requestID(protocol.MessageGenerate)
 	request := protocol.Request{
-		Type:     protocol.MessageGenerate,
-		ID:       id,
-		Provider: "local",
-		Model:    *model,
-		Stream:   stream,
+		Type:      protocol.MessageGenerate,
+		ID:        id,
+		Provider:  "local",
+		Model:     *model,
+		ModelType: *modelType,
+		Level:     *level,
+		Stream:    stream,
 		Input: &protocol.Input{
 			Kind:   "prompt",
 			Prompt: *prompt,

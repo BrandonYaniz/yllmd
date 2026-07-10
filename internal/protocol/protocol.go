@@ -24,6 +24,8 @@ type Request struct {
 	Action       string             `json:"action,omitempty"`
 	Provider     string             `json:"provider,omitempty"`
 	Model        string             `json:"model,omitempty"`
+	ModelType    string             `json:"model_type,omitempty"`
+	Level        string             `json:"level,omitempty"`
 	Version      string             `json:"version,omitempty"`
 	File         string             `json:"file,omitempty"`
 	SHA256       string             `json:"sha256,omitempty"`
@@ -169,6 +171,8 @@ type ModelDescriptor struct {
 	ID               ModelID           `json:"id"`
 	Name             string            `json:"name"`
 	DisplayName      string            `json:"display_name"`
+	ModelType        string            `json:"model_type"`
+	Level            string            `json:"level"`
 	Tier             string            `json:"tier"`
 	Resident         bool              `json:"resident"`
 	Capabilities     ModelCapabilities `json:"capabilities"`
@@ -274,6 +278,11 @@ func (r Request) ValidateGenerate() error {
 	case "", "json", "text", "raw":
 	default:
 		return fmt.Errorf("output_format %q is not supported", r.OutputFormat)
+	}
+	switch r.ModelType {
+	case "", "llm", "code":
+	default:
+		return fmt.Errorf("model_type %q is not supported", r.ModelType)
 	}
 	return nil
 }

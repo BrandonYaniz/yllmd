@@ -93,6 +93,58 @@ func TestProvidersRequest(t *testing.T) {
 	}
 }
 
+func TestGenerateRequestResolvesModelTypeAndLevel(t *testing.T) {
+	cfg := testConfig()
+	cfg.Queue.MaxDepth = 2
+	cfg.ModelLifecycle.ResidentModel = "llm-fast"
+	cfg.Routing.DefaultProvider = "local"
+	cfg.LocalModels = map[string]config.LocalModelConfig{
+		"llm-balanced": {
+			ModelType: "llm",
+			Tier:      "balanced",
+			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+		},
+		"llm-fast": {
+			ModelType: "llm",
+			Tier:      "fast",
+			Resident:  true,
+			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+		},
+		"code-balanced": {
+			ModelType: "code",
+			Tier:      "balanced",
+			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+		},
+	}
+	server := NewServer(cfg, nil, nil)
+	client := newMemoryClient()
+
+	server.enqueueGenerate(client, protocol.Request{
+		Type:      protocol.MessageGenerate,
+		ID:        "req-1",
+		Provider:  "local",
+		ModelType: "code",
+		Level:     "balanced",
+		Input:     &protocol.Input{Kind: "prompt", Prompt: "hello"},
+	})
+
+	event := readMemoryEvent(t, client)
+	if event.Type != "accepted" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	job := server.queued["req-1"]
+	if job == nil {
+		t.Fatal("expected queued job")
+	}
+	if job.request.Model != "code-balanced" {
+		t.Fatalf("queued model = %q", job.request.Model)
+	}
+	job.cancel()
+}
+
 func TestInstallModel(t *testing.T) {
 	cfg := modelTestConfig(t)
 	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))
@@ -485,7 +537,7 @@ func TestChgrpSocketRejectsUnknownGroup(t *testing.T) {
 
 func testConfig() config.Config {
 	return config.Config{
-		Queue:          config.QueueConfig{MaxDepth: 1},
+		Queue:          config.QueueConfig{MaxDepth: 1, DefaultTimeout: time.Minute},
 		ModelLifecycle: config.ModelLifecycleConfig{IdleCooldown: time.Minute},
 	}
 }
