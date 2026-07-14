@@ -5,13 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/BrandonYaniz/yllmd/internal/catalog"
+	"github.com/BrandonYaniz/yllmd/internal/compatibility"
+	"github.com/BrandonYaniz/yllmd/internal/configgen"
 	"github.com/BrandonYaniz/yllmd/internal/ipc"
 	"github.com/BrandonYaniz/yllmd/internal/locations"
+	"github.com/BrandonYaniz/yllmd/internal/machine"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 )
 
@@ -26,15 +30,15 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fatal(fmt.Errorf("resolve home directory: %w", err))
+	}
+	paths, err := locations.Resolve(locations.Mode(*mode), runtime.GOOS, runtime.GOARCH, home)
+	if err != nil {
+		fatal(err)
+	}
 	if *socketPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fatal(fmt.Errorf("resolve home directory: %w", err))
-		}
-		paths, err := locations.Resolve(locations.Mode(*mode), runtime.GOOS, runtime.GOARCH, home)
-		if err != nil {
-			fatal(err)
-		}
 		*socketPath = paths.SocketPath
 	}
 
@@ -52,7 +56,9 @@ func main() {
 	case "providers":
 		runSingle(*socketPath, protocol.MessageProviders)
 	case "models":
-		runModels(*socketPath, args[1:])
+		runModels(*socketPath, paths.ModelDir, args[1:])
+	case "config":
+		runConfig(locations.Mode(*mode), paths, args[1:])
 	case "cancel":
 		runCancel(*socketPath, args[1:])
 	case "generate":
@@ -61,6 +67,117 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+type repeatedStrings []string
+
+func (values *repeatedStrings) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *repeatedStrings) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("value must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
+
+func runConfig(mode locations.Mode, paths locations.Paths, args []string) {
+	if len(args) == 0 || args[0] != "create" {
+		usage()
+		os.Exit(2)
+	}
+	flags := flag.NewFlagSet("config create", flag.ExitOnError)
+	var variantIDs repeatedStrings
+	flags.Var(&variantIDs, "variant", "catalog variant ID to assign (repeatable)")
+	residentID := flags.String("resident", "", "selected variant to keep resident")
+	runnerCommand := flags.String("runner", "yllama-runner", "yllama runner command")
+	threads := flags.Int("threads", runtime.NumCPU(), "runner thread count")
+	output := flags.String("output", paths.ConfigFile, "configuration output path")
+	force := flags.Bool("force", false, "replace an existing configuration")
+	if err := flags.Parse(args[1:]); err != nil {
+		fatal(err)
+	}
+	if len(flags.Args()) != 0 || len(variantIDs) == 0 {
+		usage()
+		os.Exit(2)
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		fatal(err)
+	}
+	variants := make([]catalog.Variant, 0, len(variantIDs))
+	seen := make(map[string]struct{}, len(variantIDs))
+	for _, id := range variantIDs {
+		if _, exists := seen[id]; exists {
+			fatal(fmt.Errorf("variant %q was selected more than once", id))
+		}
+		seen[id] = struct{}{}
+		_, variant, ok := modelCatalog.Variant(id)
+		if !ok {
+			fatal(fmt.Errorf("model variant %q is not in the curated catalog", id))
+		}
+		variants = append(variants, variant)
+	}
+	data, err := configgen.Generate(configgen.Options{
+		Mode:          mode,
+		Paths:         paths,
+		Variants:      variants,
+		ResidentID:    *residentID,
+		RunnerCommand: *runnerCommand,
+		Threads:       *threads,
+	})
+	if err != nil {
+		fatal(err)
+	}
+	if err := writeConfig(*output, data, *force, mode); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("Wrote %s configuration to %s\n", mode, *output)
+	fmt.Println("Selected catalog variants are planned; install qualified artifacts before starting yllmd.")
+}
+
+func writeConfig(path string, data []byte, force bool, mode locations.Mode) error {
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("configuration already exists at %s (use -force to replace it)", path)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	directoryMode := os.FileMode(0o700)
+	if mode == locations.ModeDaemon {
+		directoryMode = 0o755
+	}
+	if err := os.MkdirAll(filepath.Dir(path), directoryMode); err != nil {
+		return fmt.Errorf("create configuration directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temporary configuration: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("install configuration: %w", err)
+	}
+	return nil
 }
 
 func runSingle(socketPath string, messageType protocol.MessageType) {
@@ -80,13 +197,13 @@ func runSingle(socketPath string, messageType protocol.MessageType) {
 	printJSON(event)
 }
 
-func runModels(socketPath string, args []string) {
+func runModels(socketPath, modelDir string, args []string) {
 	if len(args) >= 1 && (args[0] == "families" || args[0] == "available") {
 		runCatalogFamilies(args[1:])
 		return
 	}
 	if len(args) >= 1 && args[0] == "variants" {
-		runCatalogVariants(args[1:])
+		runCatalogVariants(modelDir, args[1:])
 		return
 	}
 	if len(args) == 1 && args[0] == "list" {
@@ -138,7 +255,7 @@ func runCatalogFamilies(args []string) {
 	}
 }
 
-func runCatalogVariants(args []string) {
+func runCatalogVariants(modelDir string, args []string) {
 	if len(args) == 0 {
 		usage()
 		os.Exit(2)
@@ -161,8 +278,24 @@ func runCatalogVariants(args []string) {
 	if !ok {
 		fatal(fmt.Errorf("model family %q is not in the curated catalog", familyID))
 	}
+	profile, err := machine.Detect(modelDir)
+	if err != nil {
+		fatal(err)
+	}
+	assessments := make([]compatibility.Assessment, 0, len(family.Variants))
+	for _, variant := range family.Variants {
+		assessment, err := compatibility.Assess(variant, profile)
+		if err != nil {
+			fatal(err)
+		}
+		assessments = append(assessments, assessment)
+	}
 	if *jsonOutput {
-		printJSON(family)
+		printJSON(struct {
+			Family      catalog.Family             `json:"family"`
+			Machine     machine.Profile            `json:"machine"`
+			Assessments []compatibility.Assessment `json:"assessments"`
+		}{Family: family, Machine: profile, Assessments: assessments})
 		return
 	}
 	fmt.Printf("%s\n", family.Name)
@@ -170,10 +303,42 @@ func runCatalogVariants(args []string) {
 	fmt.Printf("Origin: %s\n", strings.Join(family.Countries, ", "))
 	fmt.Printf("License: %s\n", family.License.Name)
 	fmt.Printf("%s\n\n", family.Description)
-	fmt.Printf("%-34s %-10s %-10s %-22s %s\n", "VARIANT", "TYPE", "LEVEL", "PARAMETERS", "STATUS")
-	for _, variant := range family.Variants {
-		fmt.Printf("%-34s %-10s %-10s %-22s %s\n", variant.ID, variant.ModelType, variant.Level, variant.ParameterCount, variant.Status)
+	fmt.Printf("Machine: %s %s · %s RAM · %s disk available\n",
+		profile.OS, profile.Architecture, formatDetectedBytes(profile.MemoryBytes), formatDetectedBytes(profile.AvailableDiskBytes))
+	for _, warning := range profile.Warnings {
+		fmt.Printf("Warning: %s\n", warning)
 	}
+	fmt.Println()
+	fmt.Printf("%-34s %-10s %-10s %-10s %-10s %-5s %s\n", "VARIANT", "TYPE", "LEVEL", "STORAGE*", "RAM*", "FIT", "STATUS")
+	for _, assessment := range assessments {
+		fit := "unknown"
+		if assessment.CompatibilityKnown {
+			fit = "yes"
+		}
+		if assessment.CompatibilityKnown && !assessment.Compatible {
+			fit = "no"
+		}
+		fmt.Printf("%-34s %-10s %-10s %-10s %-10s %-5s %s\n",
+			assessment.Variant.ID,
+			assessment.Variant.ModelType,
+			assessment.Variant.Level,
+			compatibility.FormatBytes(assessment.Requirements.StorageBytes),
+			compatibility.FormatBytes(assessment.Requirements.RecommendedRAM),
+			fit,
+			assessment.Variant.Status,
+		)
+		if !assessment.Compatible {
+			fmt.Printf("  %s\n", strings.Join(assessment.Reasons, "; "))
+		}
+	}
+	fmt.Println("\n* Estimated for the planned Q4_K_M artifact; qualified measurements will replace estimates.")
+}
+
+func formatDetectedBytes(bytes uint64) string {
+	if bytes == 0 {
+		return "unknown"
+	}
+	return compatibility.FormatBytes(bytes)
 }
 
 func runModelsInstall(socketPath string, args []string) {
@@ -443,7 +608,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <health|status|providers|models families|models variants family|models list|models versions model|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models list|models versions model|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
 }
 
 func fatal(err error) {

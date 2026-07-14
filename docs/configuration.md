@@ -36,6 +36,11 @@ Daemon mode uses platform-specific system paths:
 Pass `-config` to `yllmd` or `-socket` to `yllmctl` to override the selected
 mode's default path.
 
+Generate a configuration from curated catalog variants with `yllmctl config
+create`. The generator records the operating mode in the file, chooses paths
+for that mode, and refuses to overwrite an existing configuration unless
+`-force` is supplied.
+
 ## Duration values
 
 Duration values use Go-style duration strings:

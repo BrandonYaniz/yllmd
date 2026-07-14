@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	OperatingMode   string                          `yaml:"operating_mode,omitempty"`
 	Server          ServerConfig                    `yaml:"server"`
 	Queue           QueueConfig                     `yaml:"queue"`
 	ModelLifecycle  ModelLifecycleConfig            `yaml:"model_lifecycle"`
@@ -106,6 +107,9 @@ func Load(path string) (Config, error) {
 
 func (c Config) Validate() error {
 	var errs []error
+	if c.OperatingMode != "" && c.OperatingMode != "user" && c.OperatingMode != "daemon" {
+		errs = append(errs, fmt.Errorf("operating_mode %q is not supported", c.OperatingMode))
+	}
 	if c.Server.SocketPath == "" {
 		errs = append(errs, errors.New("server.socket_path is required"))
 	}

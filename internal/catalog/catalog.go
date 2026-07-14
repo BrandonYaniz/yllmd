@@ -130,6 +130,17 @@ func (c Catalog) Family(id string) (Family, bool) {
 	return Family{}, false
 }
 
+func (c Catalog) Variant(id string) (Family, Variant, bool) {
+	for _, family := range c.Families {
+		for _, variant := range family.Variants {
+			if variant.ID == id {
+				return family, variant, true
+			}
+		}
+	}
+	return Family{}, Variant{}, false
+}
+
 func (c Catalog) SortedFamilies() []Family {
 	families := append([]Family(nil), c.Families...)
 	sort.Slice(families, func(i, j int) bool { return families[i].Name < families[j].Name })
