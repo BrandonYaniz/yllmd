@@ -31,3 +31,10 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDecodeRequiresArtifactForAvailableVariant(t *testing.T) {
+	data := strings.Replace(string(embeddedCatalog), "status: planned", "status: available", 1)
+	if _, err := Decode([]byte(data)); err == nil || !strings.Contains(err.Error(), "artifact is required") {
+		t.Fatalf("error = %v", err)
+	}
+}

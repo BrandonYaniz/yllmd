@@ -3,9 +3,11 @@ package catalog
 import (
 	"bytes"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,15 +41,29 @@ type License struct {
 }
 
 type Variant struct {
-	ID              string   `yaml:"id" json:"id"`
-	Name            string   `yaml:"name" json:"name"`
-	ModelType       string   `yaml:"model_type" json:"model_type"`
-	Level           string   `yaml:"level" json:"level"`
-	ParameterCount  string   `yaml:"parameter_count" json:"parameter_count"`
-	Capabilities    []string `yaml:"capabilities" json:"capabilities"`
-	Status          string   `yaml:"status" json:"status"`
-	RecommendedRAM  uint64   `yaml:"recommended_ram_bytes" json:"recommended_ram_bytes,omitempty"`
-	ExpectedStorage uint64   `yaml:"expected_storage_bytes" json:"expected_storage_bytes,omitempty"`
+	ID              string    `yaml:"id" json:"id"`
+	Name            string    `yaml:"name" json:"name"`
+	ModelType       string    `yaml:"model_type" json:"model_type"`
+	Level           string    `yaml:"level" json:"level"`
+	ParameterCount  string    `yaml:"parameter_count" json:"parameter_count"`
+	Capabilities    []string  `yaml:"capabilities" json:"capabilities"`
+	Status          string    `yaml:"status" json:"status"`
+	RecommendedRAM  uint64    `yaml:"recommended_ram_bytes" json:"recommended_ram_bytes,omitempty"`
+	ExpectedStorage uint64    `yaml:"expected_storage_bytes" json:"expected_storage_bytes,omitempty"`
+	Artifact        *Artifact `yaml:"artifact,omitempty" json:"artifact,omitempty"`
+}
+
+type Artifact struct {
+	Format         string `yaml:"format" json:"format"`
+	Quantization   string `yaml:"quantization" json:"quantization"`
+	Repository     string `yaml:"repository" json:"repository"`
+	Revision       string `yaml:"revision" json:"revision"`
+	URL            string `yaml:"url" json:"url"`
+	Filename       string `yaml:"filename" json:"filename"`
+	SizeBytes      uint64 `yaml:"size_bytes" json:"size_bytes"`
+	SHA256         string `yaml:"sha256" json:"sha256"`
+	MinimumRunner  string `yaml:"minimum_runner_version" json:"minimum_runner_version"`
+	PromptTemplate string `yaml:"prompt_template" json:"prompt_template"`
 }
 
 func Load() (Catalog, error) {
@@ -116,7 +132,40 @@ func (c Catalog) Validate() error {
 			if variant.Status != "planned" && variant.Status != "available" && variant.Status != "deprecated" {
 				errs = append(errs, fmt.Errorf("%s.status %q is not supported", variantPath, variant.Status))
 			}
+			if variant.Status == "available" && variant.Artifact == nil {
+				errs = append(errs, fmt.Errorf("%s.artifact is required when status is available", variantPath))
+			}
+			if variant.Artifact != nil {
+				if err := validateArtifact(*variant.Artifact); err != nil {
+					errs = append(errs, fmt.Errorf("%s.artifact: %w", variantPath, err))
+				}
+			}
 		}
+	}
+	return errors.Join(errs...)
+}
+
+func validateArtifact(artifact Artifact) error {
+	var errs []error
+	if artifact.Format != "gguf" {
+		errs = append(errs, fmt.Errorf("format %q is not supported", artifact.Format))
+	}
+	if artifact.Quantization == "" || artifact.Repository == "" || artifact.URL == "" || artifact.Filename == "" {
+		errs = append(errs, errors.New("quantization, repository, url, and filename are required"))
+	}
+	if artifact.SizeBytes == 0 {
+		errs = append(errs, errors.New("size_bytes must be positive"))
+	}
+	checksum := strings.ToLower(strings.TrimSpace(artifact.SHA256))
+	if decoded, err := hex.DecodeString(checksum); err != nil || len(decoded) != 32 {
+		errs = append(errs, errors.New("sha256 must be a 64-character hexadecimal digest"))
+	}
+	revision := strings.TrimSpace(artifact.Revision)
+	if decoded, err := hex.DecodeString(revision); err != nil || len(decoded) != 20 {
+		errs = append(errs, errors.New("revision must be a full 40-character Git commit hash"))
+	}
+	if artifact.MinimumRunner == "" || artifact.PromptTemplate == "" {
+		errs = append(errs, errors.New("minimum_runner_version and prompt_template are required"))
 	}
 	return errors.Join(errs...)
 }

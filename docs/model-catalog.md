@@ -63,3 +63,19 @@ routing roles are deliberately separate operations.
 
 Configuration generation currently warns that draft catalog variants are
 planned. It does not make an unqualified artifact installable.
+
+## Qualified artifacts
+
+An available variant must identify one exact artifact with:
+
+- GGUF format and approved quantization;
+- upstream repository and immutable full commit revision;
+- HTTPS download URL and safe filename;
+- exact byte size and SHA-256 digest;
+- minimum runner version; and
+- prompt-template identifier.
+
+The managed downloader supports resuming partial files. It limits downloads to
+the catalog size, verifies the final size and SHA-256 digest, rejects unsafe
+filenames and non-HTTPS sources, and only moves a verified file out of staging.
+Interrupted `.part` files remain available for a later retry.
