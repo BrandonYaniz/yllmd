@@ -2,6 +2,40 @@
 
 `yllmd` uses YAML configuration.
 
+## Operating modes
+
+`yllmd` and `yllmctl` support two mutually exclusive operating modes. User mode
+is the default.
+
+```text
+yllmd -mode user
+yllmctl -mode user models families
+
+yllmd -mode daemon
+yllmctl -mode daemon status
+```
+
+User mode keeps configuration, models, logs, and state beneath `~/yllmd`:
+
+```text
+~/yllmd/config.yaml
+~/yllmd/models/
+~/yllmd/logs/
+~/yllmd/state/
+```
+
+Daemon mode uses platform-specific system paths:
+
+| Platform | Configuration | Models |
+| --- | --- | --- |
+| Linux | `/etc/yllmd` | `/var/lib/yllmd/models` |
+| FreeBSD | `/usr/local/etc/yllmd` | `/var/db/yllmd/models` |
+| macOS Homebrew (Apple Silicon) | `/opt/homebrew/etc/yllmd` | `/opt/homebrew/var/lib/yllmd/models` |
+| macOS Homebrew (Intel) | `/usr/local/etc/yllmd` | `/usr/local/var/lib/yllmd/models` |
+
+Pass `-config` to `yllmd` or `-socket` to `yllmctl` to override the selected
+mode's default path.
+
 ## Duration values
 
 Duration values use Go-style duration strings:

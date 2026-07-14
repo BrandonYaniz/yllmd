@@ -5,21 +5,37 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 	"time"
 
+	"github.com/BrandonYaniz/yllmd/internal/catalog"
 	"github.com/BrandonYaniz/yllmd/internal/ipc"
+	"github.com/BrandonYaniz/yllmd/internal/locations"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 )
 
 var version = "dev"
 
 func main() {
-	socketPath := flag.String("socket", "/var/run/yllmd/yllmd.sock", "path to yllmd Unix socket")
+	mode := flag.String("mode", string(locations.ModeUser), "operating mode: user or daemon")
+	socketPath := flag.String("socket", "", "path to yllmd Unix socket (overrides mode default)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+	if *socketPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fatal(fmt.Errorf("resolve home directory: %w", err))
+		}
+		paths, err := locations.Resolve(locations.Mode(*mode), runtime.GOOS, runtime.GOARCH, home)
+		if err != nil {
+			fatal(err)
+		}
+		*socketPath = paths.SocketPath
 	}
 
 	args := flag.Args()
@@ -65,6 +81,14 @@ func runSingle(socketPath string, messageType protocol.MessageType) {
 }
 
 func runModels(socketPath string, args []string) {
+	if len(args) >= 1 && (args[0] == "families" || args[0] == "available") {
+		runCatalogFamilies(args[1:])
+		return
+	}
+	if len(args) >= 1 && args[0] == "variants" {
+		runCatalogVariants(args[1:])
+		return
+	}
 	if len(args) == 1 && args[0] == "list" {
 		runSingle(socketPath, protocol.MessageModels)
 		return
@@ -87,6 +111,69 @@ func runModels(socketPath string, args []string) {
 	}
 	usage()
 	os.Exit(2)
+}
+
+func runCatalogFamilies(args []string) {
+	flags := flag.NewFlagSet("models families", flag.ExitOnError)
+	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		fatal(err)
+	}
+	if len(flags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		fatal(err)
+	}
+	if *jsonOutput {
+		printJSON(modelCatalog.SortedFamilies())
+		return
+	}
+	fmt.Printf("Curated model families (catalog %s)\n\n", modelCatalog.CatalogVersion)
+	for _, family := range modelCatalog.SortedFamilies() {
+		fmt.Printf("%-18s  %s\n", family.ID, family.Name)
+		fmt.Printf("%-18s  %s · %s · %d variants\n", "", strings.Join(family.Countries, ", "), family.License.Name, len(family.Variants))
+	}
+}
+
+func runCatalogVariants(args []string) {
+	if len(args) == 0 {
+		usage()
+		os.Exit(2)
+	}
+	familyID := args[0]
+	flags := flag.NewFlagSet("models variants", flag.ExitOnError)
+	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
+	if err := flags.Parse(args[1:]); err != nil {
+		fatal(err)
+	}
+	if len(flags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		fatal(err)
+	}
+	family, ok := modelCatalog.Family(familyID)
+	if !ok {
+		fatal(fmt.Errorf("model family %q is not in the curated catalog", familyID))
+	}
+	if *jsonOutput {
+		printJSON(family)
+		return
+	}
+	fmt.Printf("%s\n", family.Name)
+	fmt.Printf("Publisher: %s\n", family.Publisher)
+	fmt.Printf("Origin: %s\n", strings.Join(family.Countries, ", "))
+	fmt.Printf("License: %s\n", family.License.Name)
+	fmt.Printf("%s\n\n", family.Description)
+	fmt.Printf("%-34s %-10s %-10s %-22s %s\n", "VARIANT", "TYPE", "LEVEL", "PARAMETERS", "STATUS")
+	for _, variant := range family.Variants {
+		fmt.Printf("%-34s %-10s %-10s %-22s %s\n", variant.ID, variant.ModelType, variant.Level, variant.ParameterCount, variant.Status)
+	}
 }
 
 func runModelsInstall(socketPath string, args []string) {
@@ -356,7 +443,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-socket path] <health|status|providers|models list|models versions model|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <health|status|providers|models families|models variants family|models list|models versions model|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
 }
 
 func fatal(err error) {

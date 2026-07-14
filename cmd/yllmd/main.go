@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
 	"github.com/BrandonYaniz/yllmd/internal/daemon"
+	"github.com/BrandonYaniz/yllmd/internal/locations"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
 	"github.com/BrandonYaniz/yllmd/internal/providers/local"
 )
@@ -18,13 +20,27 @@ import (
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "config.example.yaml", "path to YAML configuration")
+	mode := flag.String("mode", string(locations.ModeUser), "operating mode: user or daemon")
+	configPath := flag.String("config", "", "path to YAML configuration (overrides mode default)")
 	useFakeProvider := flag.Bool("fake-provider", false, "use deterministic fake local provider instead of yllama-runner")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+	if *configPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "resolve home directory:", err)
+			os.Exit(1)
+		}
+		paths, err := locations.Resolve(locations.Mode(*mode), runtime.GOOS, runtime.GOARCH, home)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "resolve mode paths:", err)
+			os.Exit(1)
+		}
+		*configPath = paths.ConfigFile
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
