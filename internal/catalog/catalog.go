@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -14,6 +16,8 @@ import (
 
 //go:embed catalog.yaml
 var embeddedCatalog []byte
+
+var runnerVersionPattern = regexp.MustCompile(`^[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}(?:-Release)?$`)
 
 type Catalog struct {
 	SchemaVersion  int      `yaml:"schema_version" json:"schema_version"`
@@ -135,9 +139,15 @@ func (c Catalog) Validate() error {
 			if variant.Status == "available" && variant.Artifact == nil {
 				errs = append(errs, fmt.Errorf("%s.artifact is required when status is available", variantPath))
 			}
+			if variant.Status == "available" && (variant.RecommendedRAM == 0 || variant.ExpectedStorage == 0) {
+				errs = append(errs, fmt.Errorf("%s requires recommended_ram_bytes and expected_storage_bytes when status is available", variantPath))
+			}
 			if variant.Artifact != nil {
 				if err := validateArtifact(*variant.Artifact); err != nil {
 					errs = append(errs, fmt.Errorf("%s.artifact: %w", variantPath, err))
+				}
+				if variant.ExpectedStorage > 0 && variant.ExpectedStorage != variant.Artifact.SizeBytes {
+					errs = append(errs, fmt.Errorf("%s.expected_storage_bytes must equal artifact.size_bytes", variantPath))
 				}
 			}
 		}
@@ -166,6 +176,18 @@ func validateArtifact(artifact Artifact) error {
 	}
 	if artifact.MinimumRunner == "" || artifact.PromptTemplate == "" {
 		errs = append(errs, errors.New("minimum_runner_version and prompt_template are required"))
+	}
+	if artifact.MinimumRunner != "" && !runnerVersionPattern.MatchString(artifact.MinimumRunner) {
+		errs = append(errs, errors.New("minimum_runner_version must use YY.MM.DD.NN[-Release] format"))
+	}
+	if artifact.PromptTemplate != "qwen2.5-chatml" {
+		errs = append(errs, fmt.Errorf("prompt_template %q is not supported", artifact.PromptTemplate))
+	}
+	parsedURL, err := url.Parse(artifact.URL)
+	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
+		errs = append(errs, errors.New("url must be an absolute HTTPS URL"))
+	} else if revision != "" && !strings.Contains(parsedURL.EscapedPath(), "/resolve/"+revision+"/") {
+		errs = append(errs, errors.New("url must pin the declared revision"))
 	}
 	return errors.Join(errs...)
 }

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BrandonYaniz/yllmd/internal/catalog"
 	"github.com/BrandonYaniz/yllmd/internal/config"
 	"github.com/BrandonYaniz/yllmd/internal/models"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
@@ -92,6 +93,10 @@ func (p *RunnerProvider) Generate(ctx context.Context, request providers.Generat
 }
 
 func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, request providers.GenerateRequest, events chan<- protocol.Event) error {
+	prompt, err := runnerPrompt(model, request.Input)
+	if err != nil {
+		return err
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.epoch++
@@ -119,7 +124,7 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 		return nil
 	}
 
-	if err := session.writePrompt(runnerPrompt(request.Input)); err != nil {
+	if err := session.writePrompt(prompt); err != nil {
 		p.discardSession(ctx)
 		return fmt.Errorf("send runner prompt: %w", err)
 	}
@@ -184,12 +189,42 @@ func effectiveRunnerOptions(settings protocol.GenerationSettings) runnerOptions 
 	return options
 }
 
-func runnerPrompt(input protocol.Input) string {
+func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error) {
 	if input.Kind == "prompt" {
-		return input.Prompt
+		return input.Prompt, nil
 	}
+	template, err := catalogPromptTemplate(model.Config.CatalogID)
+	if err != nil {
+		return "", err
+	}
+	switch template {
+	case "":
+		return plainMessagesPrompt(input.Messages), nil
+	case "qwen2.5-chatml":
+		return qwenChatMLPrompt(input.Messages), nil
+	default:
+		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
+	}
+}
+
+func catalogPromptTemplate(variantID string) (string, error) {
+	if variantID == "" {
+		return "", nil
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		return "", fmt.Errorf("load model catalog: %w", err)
+	}
+	_, variant, ok := modelCatalog.Variant(variantID)
+	if !ok || variant.Artifact == nil {
+		return "", nil
+	}
+	return variant.Artifact.PromptTemplate, nil
+}
+
+func plainMessagesPrompt(messages []protocol.Message) string {
 	var prompt strings.Builder
-	for _, message := range input.Messages {
+	for _, message := range messages {
 		if prompt.Len() > 0 {
 			prompt.WriteByte('\n')
 		}
@@ -197,6 +232,19 @@ func runnerPrompt(input protocol.Input) string {
 		prompt.WriteString(": ")
 		prompt.WriteString(message.Content)
 	}
+	return prompt.String()
+}
+
+func qwenChatMLPrompt(messages []protocol.Message) string {
+	var prompt strings.Builder
+	for _, message := range messages {
+		prompt.WriteString("<|im_start|>")
+		prompt.WriteString(message.Role)
+		prompt.WriteByte('\n')
+		prompt.WriteString(message.Content)
+		prompt.WriteString("<|im_end|>\n")
+	}
+	prompt.WriteString("<|im_start|>assistant\n")
 	return prompt.String()
 }
 

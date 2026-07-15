@@ -1,5 +1,5 @@
 schema_version: 1
-catalog_version: "2026.07.1-draft"
+catalog_version: "2026.07.2-draft"
 
 # Entries remain planned until an exact GGUF artifact, immutable revision,
 # checksum, runner compatibility, and memory profile have been qualified.
@@ -182,7 +182,20 @@ families:
         level: fast
         parameter_count: 1.5B
         capabilities: [code_chat, code_generation, code_repair]
-        status: planned
+        status: available
+        recommended_ram_bytes: 4294967296
+        expected_storage_bytes: 1117320768
+        artifact:
+          format: gguf
+          quantization: Q4_K_M
+          repository: Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF
+          revision: f86cb2c1fa58255f8052cc32aeede1b7482d4361
+          url: https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+          filename: qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+          size_bytes: 1117320768
+          sha256: cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046
+          minimum_runner_version: "26.07.14.00"
+          prompt_template: qwen2.5-chatml
       - id: qwen25-coder-3b-instruct
         name: Qwen2.5-Coder 3B Instruct
         model_type: code

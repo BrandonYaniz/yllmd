@@ -30,6 +30,10 @@ an artifact implementation detail; the normal workflow will install the
 catalog's approved quantization rather than asking users to choose among GGUF
 quantization names.
 
+The first qualified download is Qwen2.5-Coder 1.5B Instruct using the official
+Q4_K_M GGUF published by Qwen. Curated downloads pin an immutable upstream
+revision and verify the exact byte count and SHA-256 digest before installation.
+
 The embedded catalog is currently a draft qualification list. Entries marked
 `planned` are not installable. An entry becomes `available` only after an exact
 GGUF artifact, immutable upstream revision, SHA-256 checksum, runner version,

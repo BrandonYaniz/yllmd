@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
+	"github.com/BrandonYaniz/yllmd/internal/models"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
 )
@@ -90,6 +91,32 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 		if !strings.Contains(log, want) {
 			t.Fatalf("runner log missing %q:\n%s", want, log)
 		}
+	}
+}
+
+func TestRunnerPromptAppliesQwenChatTemplate(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen25-coder-1.5b-instruct"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "Write hello world."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|im_start|>system\nBe concise.<|im_end|>\n<|im_start|>user\nWrite hello world.<|im_end|>\n<|im_start|>assistant\n"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+func TestRunnerPromptLeavesDirectPromptUnchanged(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen25-coder-1.5b-instruct"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "prompt", Prompt: "raw prompt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt != "raw prompt" {
+		t.Fatalf("prompt = %q", prompt)
 	}
 }
 

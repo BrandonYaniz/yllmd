@@ -18,6 +18,23 @@ func TestEstimateRequirements(t *testing.T) {
 	}
 }
 
+func TestEstimateRequirementsUsesQualifiedProfile(t *testing.T) {
+	variant := catalog.Variant{
+		ID: "qualified", ParameterCount: "1.5B",
+		ExpectedStorage: 1117320768, RecommendedRAM: 2147483648,
+	}
+	requirements, err := EstimateRequirements(variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requirements.StorageBytes != variant.ExpectedStorage || requirements.RecommendedRAM != variant.RecommendedRAM {
+		t.Fatalf("requirements = %#v", requirements)
+	}
+	if requirements.Source != "qualified artifact profile" {
+		t.Fatalf("source = %q", requirements.Source)
+	}
+}
+
 func TestAssessReportsMemoryAndQualification(t *testing.T) {
 	assessment, err := Assess(catalog.Variant{
 		ID: "large", ParameterCount: "32B", Status: "planned",

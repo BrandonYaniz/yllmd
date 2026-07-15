@@ -61,6 +61,13 @@ func Assess(variant catalog.Variant, profile machine.Profile) (Assessment, error
 }
 
 func EstimateRequirements(variant catalog.Variant) (Requirements, error) {
+	if variant.ExpectedStorage > 0 && variant.RecommendedRAM > 0 {
+		return Requirements{
+			StorageBytes:   variant.ExpectedStorage,
+			RecommendedRAM: variant.RecommendedRAM,
+			Source:         "qualified artifact profile",
+		}, nil
+	}
 	parameters, err := leadingNumber(variant.ParameterCount)
 	if err != nil {
 		return Requirements{}, fmt.Errorf("estimate %s requirements: %w", variant.ID, err)

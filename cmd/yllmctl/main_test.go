@@ -37,9 +37,12 @@ func TestCatalogInstallSelectionRejectsDuplicate(t *testing.T) {
 	}
 }
 
-func TestCatalogInstallSelectionAllRequiresQualifiedVariant(t *testing.T) {
-	_, err := catalogInstallSelection("qwen-coder", nil, true)
-	if err == nil {
-		t.Fatal("expected no qualified variants error")
+func TestCatalogInstallSelectionAllIncludesOnlyQualifiedVariants(t *testing.T) {
+	selected, err := catalogInstallSelection("qwen-coder", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0] != "qwen25-coder-1.5b-instruct" {
+		t.Fatalf("selected = %#v", selected)
 	}
 }

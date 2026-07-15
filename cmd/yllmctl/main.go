@@ -352,7 +352,7 @@ func runCatalogVariants(modelDir string, args []string) {
 		fmt.Printf("Warning: %s\n", warning)
 	}
 	fmt.Println()
-	fmt.Printf("%-34s %-10s %-10s %-10s %-10s %-5s %s\n", "VARIANT", "TYPE", "LEVEL", "STORAGE*", "RAM*", "FIT", "STATUS")
+	fmt.Printf("%-34s %-10s %-10s %-10s %-10s %-5s %s\n", "VARIANT", "TYPE", "LEVEL", "STORAGE", "RAM", "FIT", "STATUS")
 	for _, assessment := range assessments {
 		fit := "unknown"
 		if assessment.CompatibilityKnown {
@@ -374,7 +374,7 @@ func runCatalogVariants(modelDir string, args []string) {
 			fmt.Printf("  %s\n", strings.Join(assessment.Reasons, "; "))
 		}
 	}
-	fmt.Println("\n* Estimated for the planned Q4_K_M artifact; qualified measurements will replace estimates.")
+	fmt.Println("\nAvailable rows use qualified artifact profiles; planned rows are Q4_K_M estimates.")
 }
 
 func formatDetectedBytes(bytes uint64) string {
