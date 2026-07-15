@@ -31,6 +31,17 @@ func TestDecodeRequiresID(t *testing.T) {
 	}
 }
 
+func TestValidateModelDownload(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "download", Model: "qwen25-coder-7b-instruct"}
+	if err := req.ValidateModelDownload(); err != nil {
+		t.Fatal(err)
+	}
+	req.Model = ""
+	if err := req.ValidateModelDownload(); err == nil {
+		t.Fatal("expected missing catalog variant error")
+	}
+}
+
 func TestValidateGenerateAcceptsMessages(t *testing.T) {
 	req := Request{
 		Type: MessageGenerate,

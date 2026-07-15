@@ -79,3 +79,38 @@ The managed downloader supports resuming partial files. It limits downloads to
 the catalog size, verifies the final size and SHA-256 digest, rejects unsafe
 filenames and non-HTTPS sources, and only moves a verified file out of staging.
 Interrupted `.part` files remain available for a later retry.
+
+## Install qualified variants
+
+Install one qualified variant directly:
+
+```text
+yllmctl models install qwen25-coder-7b-instruct
+```
+
+Select multiple variants from one family, or every qualified variant:
+
+```text
+yllmctl models install qwen-coder \
+  -variant qwen25-coder-3b-instruct \
+  -variant qwen25-coder-7b-instruct
+
+yllmctl models install qwen-coder -all
+```
+
+The CLI validates family membership before contacting the daemon. The daemon
+performs each download, emits progress, verifies the artifact, and copies it
+into versioned model storage. Catalog installation does not activate a model by
+default; pass `-activate` only after the variant is present in the daemon's
+configuration.
+
+For a family requiring explicit terms, pass `-accept-license` after reviewing
+the license shown by `models variants`. Persistent versioned acceptance records
+remain required before any custom-license catalog entry is qualified.
+
+The legacy local-file installation path remains available:
+
+```text
+yllmctl models install local-name \
+  -file model.gguf -version local-v1 -sha256 <digest>
+```

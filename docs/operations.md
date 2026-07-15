@@ -30,6 +30,11 @@ A safe update flow is:
 6. Reload during an idle window.
 7. Roll back if loading fails.
 
+Qualified curated artifacts use this flow through `yllmctl models install`.
+Downloads are retained as resumable partial files after interruption. A fully
+verified staging file is removed after it has been copied into versioned model
+storage.
+
 Use `yllmctl models activate <model> -version <id>` to switch to an already installed version without reinstalling the model file. Activation requires the daemon to be idle.
 
 Use `yllmctl models versions <model>` to inspect installed versions, active state, checksum metadata, and storage paths.

@@ -16,7 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BrandonYaniz/yllmd/internal/catalog"
 	"github.com/BrandonYaniz/yllmd/internal/config"
+	artifactdownload "github.com/BrandonYaniz/yllmd/internal/download"
 	"github.com/BrandonYaniz/yllmd/internal/models"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
@@ -24,19 +26,26 @@ import (
 )
 
 type Server struct {
-	cfg      config.Config
-	models   models.Registry
-	provider providers.Provider
-	logger   *slog.Logger
+	cfg        config.Config
+	models     models.Registry
+	provider   providers.Provider
+	logger     *slog.Logger
+	catalog    catalog.Catalog
+	downloader artifactDownloader
 
 	listener *net.UnixListener
 	jobs     chan *generateJob
 	done     chan struct{}
 
 	mu       sync.Mutex
+	modelMu  sync.Mutex
 	active   map[string]context.CancelFunc
 	queued   map[string]*generateJob
 	shutdown bool
+}
+
+type artifactDownloader interface {
+	Download(context.Context, catalog.Artifact, string, func(artifactdownload.Progress)) (string, error)
 }
 
 type generateJob struct {
@@ -56,15 +65,21 @@ func NewServer(cfg config.Config, provider providers.Provider, logger *slog.Logg
 	if logger == nil {
 		logger = slog.Default()
 	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		logger.Error("embedded model catalog is invalid", "error", err)
+	}
 	return &Server{
-		cfg:      cfg,
-		models:   models.NewRegistry(cfg),
-		provider: provider,
-		logger:   logger,
-		jobs:     make(chan *generateJob, cfg.Queue.MaxDepth),
-		done:     make(chan struct{}),
-		active:   make(map[string]context.CancelFunc),
-		queued:   make(map[string]*generateJob),
+		cfg:        cfg,
+		models:     models.NewRegistry(cfg),
+		provider:   provider,
+		logger:     logger,
+		catalog:    modelCatalog,
+		downloader: artifactdownload.Downloader{},
+		jobs:       make(chan *generateJob, cfg.Queue.MaxDepth),
+		done:       make(chan struct{}),
+		active:     make(map[string]context.CancelFunc),
+		queued:     make(map[string]*generateJob),
 	}
 }
 
@@ -176,6 +191,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors()})
 	case "install":
 		s.installModel(client, req)
+	case "download":
+		s.downloadModel(client, req)
 	case "activate":
 		s.activateModel(client, req)
 	case "versions":
@@ -192,6 +209,8 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
 		return
 	}
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
 	model, err := s.models.Resolve(req.Model)
 	if err != nil {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
@@ -223,11 +242,90 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
 }
 
+func (s *Server) downloadModel(client *clientConn, req protocol.Request) {
+	if err := req.ValidateModelDownload(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		return
+	}
+	family, variant, ok := s.catalog.Variant(req.Model)
+	if !ok {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: fmt.Sprintf("catalog variant %q is not available", req.Model)})
+		return
+	}
+	if variant.Status != "available" || variant.Artifact == nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_not_qualified", Message: fmt.Sprintf("catalog variant %q has not completed artifact qualification", variant.ID)})
+		return
+	}
+	if family.License.AcceptanceRequired && !req.LicenseAccepted {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "license_acceptance_required", Message: fmt.Sprintf("%s requires explicit acceptance of %s", family.Name, family.License.Name)})
+		return
+	}
+	activate := req.Activate != nil && *req.Activate
+	if activate {
+		if _, err := s.models.Resolve(variant.ID); err != nil {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_not_configured", Message: "catalog variant must be configured before activation"})
+			return
+		}
+		if !s.isIdle() {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "daemon_busy", Message: "model activation requires an idle daemon"})
+			return
+		}
+	}
+
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	store := storage.NewModelStore(s.cfg)
+	versionID := variant.Artifact.Revision
+	if _, err := os.Stat(store.VersionDir(variant.ID, versionID)); err == nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "version_exists", Message: fmt.Sprintf("catalog artifact %s is already installed", versionID)})
+		return
+	} else if !os.IsNotExist(err) {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "install_failed", Message: err.Error()})
+		return
+	}
+	downloadDir := filepath.Join(s.cfg.Paths.StateDir, "downloads", variant.ID)
+	if s.cfg.Paths.StateDir == "" {
+		downloadDir = filepath.Join(s.cfg.Paths.ModelDir, ".downloads", variant.ID)
+	}
+	path, err := s.downloader.Download(context.Background(), *variant.Artifact, downloadDir, func(progress artifactdownload.Progress) {
+		_ = client.write(protocol.Event{
+			Type:            "download_progress",
+			ID:              req.ID,
+			Model:           variant.ID,
+			DownloadedBytes: progress.DownloadedBytes,
+			TotalBytes:      progress.TotalBytes,
+		})
+	})
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "download_failed", Message: err.Error()})
+		return
+	}
+	result, err := store.InstallLocalFile(storage.InstallRequest{
+		ModelName:  variant.ID,
+		VersionID:  versionID,
+		SourcePath: path,
+		SHA256:     variant.Artifact.SHA256,
+		CatalogID:  variant.ID,
+		Activate:   activate,
+	})
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "install_failed", Message: err.Error()})
+		return
+	}
+	_ = os.Remove(path)
+	if activate {
+		s.reloadProvider()
+	}
+	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
+}
+
 func (s *Server) activateModel(client *clientConn, req protocol.Request) {
 	if err := req.ValidateModelActivate(); err != nil {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
 		return
 	}
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
 	model, err := s.models.Resolve(req.Model)
 	if err != nil {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
@@ -257,6 +355,8 @@ func (s *Server) listModelVersions(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
 		return
 	}
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
 	model, err := s.models.Resolve(req.Model)
 	if err != nil {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})
@@ -275,6 +375,8 @@ func (s *Server) rollbackModel(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
 		return
 	}
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
 	model, err := s.models.Resolve(req.Model)
 	if err != nil {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_unavailable", Message: err.Error()})

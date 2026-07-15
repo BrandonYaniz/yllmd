@@ -348,16 +348,46 @@ func runModelsInstall(socketPath string, args []string) {
 	}
 	model := args[0]
 	installFlags := flag.NewFlagSet("models install", flag.ExitOnError)
+	var variantIDs repeatedStrings
+	installFlags.Var(&variantIDs, "variant", "variant within the selected family (repeatable)")
+	allVariants := installFlags.Bool("all", false, "install every available variant in the selected family")
 	file := installFlags.String("file", "", "local GGUF file to install")
 	version := installFlags.String("version", "", "model version id")
 	sha256 := installFlags.String("sha256", "", "expected SHA-256 checksum")
-	activate := installFlags.Bool("activate", true, "activate the installed version")
+	activate := installFlags.Bool("activate", false, "activate the installed version")
+	acceptLicense := installFlags.Bool("accept-license", false, "explicitly accept the model family's license terms")
 	if err := installFlags.Parse(args[1:]); err != nil {
 		fatal(err)
 	}
 	if len(installFlags.Args()) != 0 {
 		usage()
 		os.Exit(2)
+	}
+	activateWasSet := false
+	installFlags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "activate" {
+			activateWasSet = true
+		}
+	})
+	if *file == "" {
+		if *version != "" || *sha256 != "" {
+			fatal(fmt.Errorf("version and sha256 are only valid with -file"))
+		}
+		selected, err := catalogInstallSelection(model, variantIDs, *allVariants)
+		if err != nil {
+			fatal(err)
+		}
+		runCatalogInstalls(socketPath, selected, *acceptLicense, *activate)
+		return
+	}
+	if len(variantIDs) != 0 || *allVariants {
+		fatal(fmt.Errorf("-variant and -all cannot be combined with -file"))
+	}
+	if *acceptLicense {
+		fatal(fmt.Errorf("-accept-license is only valid for curated catalog installs"))
+	}
+	if !activateWasSet {
+		*activate = true
 	}
 	client, err := ipc.Dial(socketPath, 2*time.Second)
 	if err != nil {
@@ -381,6 +411,95 @@ func runModelsInstall(socketPath string, args []string) {
 		fatal(err)
 	}
 	printJSON(event)
+}
+
+func catalogInstallSelection(id string, requested []string, all bool) ([]string, error) {
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		return nil, err
+	}
+	if family, ok := modelCatalog.Family(id); ok {
+		if all && len(requested) != 0 {
+			return nil, fmt.Errorf("choose either -all or one or more -variant values")
+		}
+		if all {
+			selected := make([]string, 0, len(family.Variants))
+			for _, variant := range family.Variants {
+				if variant.Status == "available" {
+					selected = append(selected, variant.ID)
+				}
+			}
+			if len(selected) == 0 {
+				return nil, fmt.Errorf("model family %q has no qualified variants yet", id)
+			}
+			return selected, nil
+		}
+		if len(requested) == 0 {
+			return nil, fmt.Errorf("model family %q requires -variant or -all", id)
+		}
+		familyVariants := make(map[string]struct{}, len(family.Variants))
+		for _, variant := range family.Variants {
+			familyVariants[variant.ID] = struct{}{}
+		}
+		seen := make(map[string]struct{}, len(requested))
+		for _, variantID := range requested {
+			if _, ok := familyVariants[variantID]; !ok {
+				return nil, fmt.Errorf("variant %q does not belong to model family %q", variantID, id)
+			}
+			if _, exists := seen[variantID]; exists {
+				return nil, fmt.Errorf("variant %q was selected more than once", variantID)
+			}
+			seen[variantID] = struct{}{}
+		}
+		return append([]string(nil), requested...), nil
+	}
+	if len(requested) != 0 || all {
+		return nil, fmt.Errorf("%q is not a model family", id)
+	}
+	if _, _, ok := modelCatalog.Variant(id); !ok {
+		return nil, fmt.Errorf("model variant %q is not in the curated catalog", id)
+	}
+	return []string{id}, nil
+}
+
+func runCatalogInstalls(socketPath string, variants []string, acceptLicense, activate bool) {
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	for _, variant := range variants {
+		id := requestID(protocol.MessageModels)
+		if err := client.Send(protocol.Request{
+			Type: protocol.MessageModels, ID: id, Action: "download", Model: variant,
+			Activate: &activate, LicenseAccepted: acceptLicense,
+		}); err != nil {
+			fatal(err)
+		}
+		for {
+			event, err := client.ReadEvent()
+			if err != nil {
+				fatal(err)
+			}
+			switch event.Type {
+			case "download_progress":
+				percent := float64(0)
+				if event.TotalBytes > 0 {
+					percent = float64(event.DownloadedBytes) * 100 / float64(event.TotalBytes)
+				}
+				fmt.Fprintf(os.Stderr, "\rDownloading %s: %.1f%%", variant, percent)
+			case "installed":
+				fmt.Fprintln(os.Stderr)
+				printJSON(event)
+				goto nextVariant
+			case "error", "cancelled":
+				fmt.Fprintln(os.Stderr)
+				printJSON(event)
+				return
+			}
+		}
+	nextVariant:
+	}
 }
 
 func runModelsActivate(socketPath string, args []string) {
@@ -608,7 +727,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models list|models versions model|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
 }
 
 func fatal(err error) {

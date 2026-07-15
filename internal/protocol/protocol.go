@@ -19,22 +19,23 @@ const (
 )
 
 type Request struct {
-	Type         MessageType        `json:"type"`
-	ID           string             `json:"id"`
-	Action       string             `json:"action,omitempty"`
-	Provider     string             `json:"provider,omitempty"`
-	Model        string             `json:"model,omitempty"`
-	ModelType    string             `json:"model_type,omitempty"`
-	Level        string             `json:"level,omitempty"`
-	Version      string             `json:"version,omitempty"`
-	File         string             `json:"file,omitempty"`
-	SHA256       string             `json:"sha256,omitempty"`
-	Activate     *bool              `json:"activate,omitempty"`
-	Stream       *bool              `json:"stream,omitempty"`
-	OutputFormat string             `json:"output_format,omitempty"`
-	Input        *Input             `json:"input,omitempty"`
-	Settings     GenerationSettings `json:"settings,omitempty"`
-	Queue        QueueOptions       `json:"queue,omitempty"`
+	Type            MessageType        `json:"type"`
+	ID              string             `json:"id"`
+	Action          string             `json:"action,omitempty"`
+	Provider        string             `json:"provider,omitempty"`
+	Model           string             `json:"model,omitempty"`
+	ModelType       string             `json:"model_type,omitempty"`
+	Level           string             `json:"level,omitempty"`
+	Version         string             `json:"version,omitempty"`
+	File            string             `json:"file,omitempty"`
+	SHA256          string             `json:"sha256,omitempty"`
+	Activate        *bool              `json:"activate,omitempty"`
+	LicenseAccepted bool               `json:"license_accepted,omitempty"`
+	Stream          *bool              `json:"stream,omitempty"`
+	OutputFormat    string             `json:"output_format,omitempty"`
+	Input           *Input             `json:"input,omitempty"`
+	Settings        GenerationSettings `json:"settings,omitempty"`
+	Queue           QueueOptions       `json:"queue,omitempty"`
 }
 
 type Input struct {
@@ -68,24 +69,26 @@ type QueueOptions struct {
 }
 
 type Event struct {
-	Type          string            `json:"type"`
-	ID            string            `json:"id,omitempty"`
-	QueuePosition int               `json:"queue_position,omitempty"`
-	Provider      string            `json:"provider,omitempty"`
-	Model         string            `json:"model,omitempty"`
-	Version       string            `json:"version,omitempty"`
-	Versions      []ModelVersion    `json:"versions,omitempty"`
-	Path          string            `json:"path,omitempty"`
-	Models        []ModelDescriptor `json:"models,omitempty"`
-	Text          string            `json:"text,omitempty"`
-	FinishReason  string            `json:"finish_reason,omitempty"`
-	Usage         *Usage            `json:"usage,omitempty"`
-	Code          string            `json:"code,omitempty"`
-	Message       string            `json:"message,omitempty"`
-	Status        string            `json:"status,omitempty"`
-	Daemon        *DaemonStatus     `json:"daemon,omitempty"`
-	LoadedModel   string            `json:"loaded_model,omitempty"`
-	QueueDepth    int               `json:"queue_depth,omitempty"`
+	Type            string            `json:"type"`
+	ID              string            `json:"id,omitempty"`
+	QueuePosition   int               `json:"queue_position,omitempty"`
+	Provider        string            `json:"provider,omitempty"`
+	Model           string            `json:"model,omitempty"`
+	Version         string            `json:"version,omitempty"`
+	Versions        []ModelVersion    `json:"versions,omitempty"`
+	Path            string            `json:"path,omitempty"`
+	Models          []ModelDescriptor `json:"models,omitempty"`
+	Text            string            `json:"text,omitempty"`
+	FinishReason    string            `json:"finish_reason,omitempty"`
+	Usage           *Usage            `json:"usage,omitempty"`
+	Code            string            `json:"code,omitempty"`
+	Message         string            `json:"message,omitempty"`
+	Status          string            `json:"status,omitempty"`
+	Daemon          *DaemonStatus     `json:"daemon,omitempty"`
+	LoadedModel     string            `json:"loaded_model,omitempty"`
+	QueueDepth      int               `json:"queue_depth,omitempty"`
+	DownloadedBytes uint64            `json:"downloaded_bytes,omitempty"`
+	TotalBytes      uint64            `json:"total_bytes,omitempty"`
 }
 
 func (r Request) ValidateModelInstall() error {
@@ -106,6 +109,19 @@ func (r Request) ValidateModelInstall() error {
 	}
 	if strings.TrimSpace(r.SHA256) == "" {
 		return fmt.Errorf("sha256 is required")
+	}
+	return nil
+}
+
+func (r Request) ValidateModelDownload() error {
+	if r.Type != MessageModels {
+		return fmt.Errorf("request type must be models")
+	}
+	if r.Action != "download" {
+		return fmt.Errorf("models request action must be download")
+	}
+	if strings.TrimSpace(r.Model) == "" {
+		return fmt.Errorf("catalog variant is required")
 	}
 	return nil
 }

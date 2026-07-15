@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BrandonYaniz/yllmd/internal/catalog"
 	"github.com/BrandonYaniz/yllmd/internal/config"
+	artifactdownload "github.com/BrandonYaniz/yllmd/internal/download"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
 )
@@ -174,6 +176,59 @@ func TestInstallModel(t *testing.T) {
 	}
 	if provider.closeCount != 1 {
 		t.Fatalf("provider close count = %d", provider.closeCount)
+	}
+}
+
+func TestDownloadCatalogModel(t *testing.T) {
+	cfg := modelTestConfig(t)
+	cfg.Paths.StateDir = t.TempDir()
+	content := []byte("catalog model")
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	server := NewServer(cfg, &countingProvider{}, nil)
+	server.catalog = catalog.Catalog{Families: []catalog.Family{{
+		ID: "test-family", Name: "Test Family",
+		License: catalog.License{Name: "MIT", AcceptanceRequired: false},
+		Variants: []catalog.Variant{{
+			ID: "fast", Status: "available", Artifact: &catalog.Artifact{
+				Filename: "model.gguf", SizeBytes: uint64(len(content)), SHA256: checksum, Revision: revision,
+			},
+		}},
+	}}}
+	server.downloader = &fakeArtifactDownloader{content: content}
+	client := newMemoryClient()
+	activate := false
+	server.handleModels(client, protocol.Request{
+		Type: protocol.MessageModels, ID: "download-1", Action: "download", Model: "fast", Activate: &activate,
+	})
+	events := readMemoryEvents(t, client)
+	if len(events) != 2 || events[0].Type != "download_progress" || events[1].Type != "installed" {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[1].Version != revision {
+		t.Fatalf("version = %q", events[1].Version)
+	}
+	installed, err := os.ReadFile(filepath.Join(cfg.Paths.ModelDir, "fast", "versions", revision, "model.gguf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(installed) != string(content) {
+		t.Fatalf("installed content = %q", installed)
+	}
+}
+
+func TestDownloadCatalogModelRequiresLicenseAcceptance(t *testing.T) {
+	server := NewServer(modelTestConfig(t), nil, nil)
+	server.catalog = catalog.Catalog{Families: []catalog.Family{{
+		ID: "licensed", Name: "Licensed", License: catalog.License{Name: "Custom Terms", AcceptanceRequired: true},
+		Variants: []catalog.Variant{{ID: "licensed-fast", Status: "available", Artifact: &catalog.Artifact{}}},
+	}}}
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "download-1", Action: "download", Model: "licensed-fast"})
+	event := readMemoryEvent(t, client)
+	if event.Type != "error" || event.Code != "license_acceptance_required" {
+		t.Fatalf("event = %#v", event)
 	}
 }
 
@@ -587,6 +642,24 @@ func readMemoryEvent(t *testing.T, client *clientConn) protocol.Event {
 	return event
 }
 
+func readMemoryEvents(t *testing.T, client *clientConn) []protocol.Event {
+	t.Helper()
+	conn, ok := client.conn.(*memoryConn)
+	if !ok {
+		t.Fatal("client is not using memory conn")
+	}
+	lines := bytes.Split(bytes.TrimSpace(conn.buf.Bytes()), []byte("\n"))
+	events := make([]protocol.Event, 0, len(lines))
+	for _, line := range lines {
+		var event protocol.Event
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("decode event: %v; raw=%q", err, line)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
 type memoryConn struct {
 	buf bytes.Buffer
 }
@@ -635,6 +708,22 @@ func (a dummyAddr) String() string {
 
 type countingProvider struct {
 	closeCount int
+}
+
+type fakeArtifactDownloader struct {
+	content []byte
+}
+
+func (d *fakeArtifactDownloader) Download(_ context.Context, artifact catalog.Artifact, destination string, report func(artifactdownload.Progress)) (string, error) {
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(destination, artifact.Filename)
+	if err := os.WriteFile(path, d.content, 0o600); err != nil {
+		return "", err
+	}
+	report(artifactdownload.Progress{DownloadedBytes: uint64(len(d.content)), TotalBytes: uint64(len(d.content))})
+	return path, nil
 }
 
 func (p *countingProvider) ID() string {

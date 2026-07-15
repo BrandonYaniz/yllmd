@@ -111,5 +111,13 @@ The `models` request supports:
 - `list`, list configured models.
 - `versions`, list installed versions for one configured model.
 - `install`, install a local GGUF file as a version.
+- `download`, download and install a qualified curated catalog variant. Progress
+  is emitted as `download_progress` events with `downloaded_bytes` and
+  `total_bytes`.
 - `activate`, switch `current` to an installed version while the daemon is idle.
 - `rollback`, restore the previous activation while the daemon is idle.
+
+A `download` request uses the catalog variant ID in `model`. Families with
+custom terms require `license_accepted: true`. This field is an explicit
+acknowledgement for the current operation; persistent, versioned acceptance
+records are planned before custom-license artifacts become available.
