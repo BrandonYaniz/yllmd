@@ -37,21 +37,21 @@ Local inference is handled by an external runner process, such as `yllama-runner
 
 ## Status
 
-Pre-release. The current implementation targets a local-only release surface. Versions use `YY.MM.DD.NN` for development and beta builds, and only versions tagged with `-Release` should be considered release builds. Remote provider adapters and automatic model update checks are planned but not part of the current release surface.
+Pre-release. The current implementation targets a local-only release surface. Versions use `YY.MM.DD.NN` for development and beta builds, and only versions tagged with `-Release` should be considered release builds. Remote provider adapters and automatic catalog refresh checks are planned but not part of the current release surface.
 
 Implemented:
 
 - Unix domain socket server using JSON Lines.
 - FIFO request queueing and cancellation.
 - Local runner process integration over binary stdio frames.
-- Health, status, providers, generation, model list, model versions, model install, model activate, and rollback commands through `yllmctl`.
+- Curated model discovery, verified download, update, inventory, activation, rollback, and deletion through `yllmctl`.
 - Local model version activation through a `current` symlink.
 - Model routing by `model_type` (`llm` or `code`) and level (`fast`, `balanced`, or `deep`).
 
 Not yet implemented:
 
 - OpenAI, Gemini, and Anthropic generation adapters.
-- Automatic model update checks and downloads.
+- Automatic catalog refresh and update checks.
 - Runtime configuration reload.
 - Packaged installers.
 

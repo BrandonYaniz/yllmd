@@ -39,6 +39,10 @@ Use `yllmctl models activate <model> -version <id>` to switch to an already inst
 
 Use `yllmctl models versions <model>` to inspect installed versions, active state, checksum metadata, and storage paths.
 
+Use `yllmctl models update <catalog-variant>` to install the embedded catalog's
+latest qualified revision for a model that is already installed. Add
+`-activate` to switch to it immediately while the daemon is idle.
+
 Use `yllmctl models delete <model> --version <id>` to remove an inactive version,
 or omit `--version` to remove an entire unconfigured installation. Active
 versions and rollback targets are protected. Removing a configured model

@@ -42,6 +42,13 @@ func TestValidateModelDownload(t *testing.T) {
 	}
 }
 
+func TestValidateModelUpdate(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "update", Model: "qwen-coder"}
+	if err := req.ValidateModelUpdate(); err != nil {
+		t.Fatalf("ValidateModelUpdate returned error: %v", err)
+	}
+}
+
 func TestValidateModelDelete(t *testing.T) {
 	req := Request{Type: MessageModels, ID: "models-1", Action: "delete", Model: "qwen25-coder-7b-instruct"}
 	if err := req.ValidateModelDelete(); err != nil {

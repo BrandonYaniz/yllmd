@@ -89,16 +89,12 @@ Interrupted `.part` files remain available for a later retry.
 Install one qualified variant directly:
 
 ```text
-yllmctl models install qwen25-coder-7b-instruct
+yllmctl models install qwen25-coder-1.5b-instruct
 ```
 
-Select multiple variants from one family, or every qualified variant:
+Install every currently qualified variant in a family:
 
 ```text
-yllmctl models install qwen-coder \
-  -variant qwen25-coder-3b-instruct \
-  -variant qwen25-coder-7b-instruct
-
 yllmctl models install qwen-coder -all
 ```
 
@@ -107,6 +103,20 @@ performs each download, emits progress, verifies the artifact, and copies it
 into versioned model storage. Catalog installation does not activate a model by
 default; pass `-activate` only after the variant is present in the daemon's
 configuration.
+
+## Update a curated model
+
+Update an installed variant to the catalog's latest qualified revision:
+
+```text
+yllmctl models update qwen25-coder-1.5b-instruct
+```
+
+The command is idempotent: it reports `up_to_date` when that immutable revision
+is already installed. If the catalog points to a newer revision, the daemon
+downloads and verifies it as a new installed version. Pass `-activate` to make
+the qualified revision current; activation still requires a configured model
+and an idle daemon, and preserves the previous version for rollback.
 
 For a family requiring explicit terms, pass `-accept-license` after reviewing
 the license shown by `models variants`. Persistent versioned acceptance records
@@ -134,8 +144,8 @@ the model is configured.
 Delete one inactive version or an entire unconfigured installation:
 
 ```text
-yllmctl models delete qwen25-coder-7b-instruct --version <revision>
-yllmctl models delete qwen25-coder-7b-instruct
+yllmctl models delete qwen25-coder-1.5b-instruct --version <revision>
+yllmctl models delete qwen25-coder-1.5b-instruct
 ```
 
 Deletion prompts for confirmation. Pass `--yes` for an intentional

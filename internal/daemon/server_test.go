@@ -219,6 +219,90 @@ func TestDownloadCatalogModel(t *testing.T) {
 	}
 }
 
+func TestUpdateCatalogModelReportsUpToDate(t *testing.T) {
+	cfg := modelTestConfig(t)
+	cfg.Paths.StateDir = t.TempDir()
+	content := []byte("catalog model")
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	server := NewServer(cfg, &countingProvider{}, nil)
+	server.catalog = catalog.Catalog{Families: []catalog.Family{{
+		ID: "test-family", Name: "Test Family", License: catalog.License{Name: "MIT"},
+		Variants: []catalog.Variant{{ID: "fast", Status: "available", Artifact: &catalog.Artifact{
+			Filename: "model.gguf", SizeBytes: uint64(len(content)), SHA256: checksum, Revision: revision,
+		}}},
+	}}}
+	server.downloader = &fakeArtifactDownloader{content: content}
+	activate := false
+	installClient := newMemoryClient()
+	server.handleModels(installClient, protocol.Request{
+		Type: protocol.MessageModels, ID: "download-1", Action: "download", Model: "fast", Activate: &activate,
+	})
+	_ = readMemoryEvents(t, installClient)
+
+	updateClient := newMemoryClient()
+	server.handleModels(updateClient, protocol.Request{
+		Type: protocol.MessageModels, ID: "update-1", Action: "update", Model: "fast", Activate: &activate,
+	})
+	event := readMemoryEvent(t, updateClient)
+	if event.Type != "up_to_date" || event.Version != revision {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestUpdateCatalogModelInstallsNewQualifiedRevision(t *testing.T) {
+	cfg := modelTestConfig(t)
+	cfg.Paths.StateDir = t.TempDir()
+	oldPath, oldChecksum := writeDaemonSourceModel(t, []byte("old catalog model"))
+	if _, err := storage.NewModelStore(cfg).InstallLocalFile(storage.InstallRequest{
+		ModelName: "fast", VersionID: "old", SourcePath: oldPath, SHA256: oldChecksum, CatalogID: "fast",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := []byte("new catalog model")
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	server := NewServer(cfg, &countingProvider{}, nil)
+	server.catalog = catalog.Catalog{Families: []catalog.Family{{
+		ID: "test-family", Name: "Test Family", License: catalog.License{Name: "MIT"},
+		Variants: []catalog.Variant{{ID: "fast", Status: "available", Artifact: &catalog.Artifact{
+			Filename: "model.gguf", SizeBytes: uint64(len(content)), SHA256: checksum, Revision: revision,
+		}}},
+	}}}
+	server.downloader = &fakeArtifactDownloader{content: content}
+	activate := false
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{
+		Type: protocol.MessageModels, ID: "update-1", Action: "update", Model: "fast", Activate: &activate,
+	})
+	events := readMemoryEvents(t, client)
+	if len(events) != 2 || events[0].Type != "download_progress" || events[1].Type != "updated" {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[1].Version != revision {
+		t.Fatalf("version = %q", events[1].Version)
+	}
+}
+
+func TestUpdateCatalogModelRequiresExistingInstall(t *testing.T) {
+	server := NewServer(modelTestConfig(t), &countingProvider{}, nil)
+	server.catalog = catalog.Catalog{Families: []catalog.Family{{
+		ID: "test-family", Name: "Test Family", License: catalog.License{Name: "MIT"},
+		Variants: []catalog.Variant{{ID: "fast", Status: "available", Artifact: &catalog.Artifact{
+			Revision: "0123456789abcdef0123456789abcdef01234567",
+		}}},
+	}}}
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "update-1", Action: "update", Model: "fast"})
+	event := readMemoryEvent(t, client)
+	if event.Type != "error" || event.Code != "model_not_installed" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
 func TestDownloadCatalogModelRequiresLicenseAcceptance(t *testing.T) {
 	server := NewServer(modelTestConfig(t), nil, nil)
 	server.catalog = catalog.Catalog{Families: []catalog.Family{{

@@ -18,14 +18,15 @@ Everything should be considered development or beta unless the version is tagged
 Included:
 
 - `yllmd` daemon over a Unix domain socket.
-- `yllmctl` health, status, generation, cancel, model list, model install, and model rollback commands.
+- `yllmctl` health, status, generation, cancel, curated model download/update,
+  inventory, activation, rollback, and deletion commands.
 - Local runner integration over binary stdio frames.
 - Local model version activation and rollback.
 
 Excluded:
 
 - Remote generation providers.
-- Automatic model update checks and downloads.
+- Automatic catalog refresh and update checks.
 - Runtime config reload.
 - Packaged installers.
 

@@ -194,7 +194,9 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 	case "install":
 		s.installModel(client, req)
 	case "download":
-		s.downloadModel(client, req)
+		s.installCatalogArtifact(client, req, false)
+	case "update":
+		s.installCatalogArtifact(client, req, true)
 	case "delete":
 		s.deleteModel(client, req)
 	case "activate":
@@ -265,9 +267,15 @@ func (s *Server) installModel(client *clientConn, req protocol.Request) {
 	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
 }
 
-func (s *Server) downloadModel(client *clientConn, req protocol.Request) {
-	if err := req.ValidateModelDownload(); err != nil {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+func (s *Server) installCatalogArtifact(client *clientConn, req protocol.Request, update bool) {
+	var validationErr error
+	if update {
+		validationErr = req.ValidateModelUpdate()
+	} else {
+		validationErr = req.ValidateModelDownload()
+	}
+	if validationErr != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: validationErr.Error()})
 		return
 	}
 	family, variant, ok := s.catalog.Variant(req.Model)
@@ -299,8 +307,33 @@ func (s *Server) downloadModel(client *clientConn, req protocol.Request) {
 	defer s.modelMu.Unlock()
 	store := storage.NewModelStore(s.cfg)
 	versionID := variant.Artifact.Revision
+	if update {
+		versions, err := store.ListVersions(variant.ID)
+		if err != nil {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "update_failed", Message: err.Error()})
+			return
+		}
+		if len(versions) == 0 {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_not_installed", Message: fmt.Sprintf("catalog variant %q is not installed", variant.ID)})
+			return
+		}
+	}
 	if _, err := os.Stat(store.VersionDir(variant.ID, versionID)); err == nil {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "version_exists", Message: fmt.Sprintf("catalog artifact %s is already installed", versionID)})
+		if !update {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "version_exists", Message: fmt.Sprintf("catalog artifact %s is already installed", versionID)})
+			return
+		}
+		if activate {
+			activeVersion, _ := store.ActiveVersion(variant.ID)
+			if activeVersion != versionID {
+				if _, err := store.ActivateVersion(variant.ID, versionID); err != nil {
+					_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "update_failed", Message: err.Error()})
+					return
+				}
+				s.reloadProvider()
+			}
+		}
+		_ = client.write(protocol.Event{Type: "up_to_date", ID: req.ID, Model: variant.ID, Version: versionID, Path: store.VersionModelPath(variant.ID, versionID)})
 		return
 	} else if !os.IsNotExist(err) {
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "install_failed", Message: err.Error()})
@@ -339,7 +372,11 @@ func (s *Server) downloadModel(client *clientConn, req protocol.Request) {
 	if activate {
 		s.reloadProvider()
 	}
-	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
+	eventType := "installed"
+	if update {
+		eventType = "updated"
+	}
+	_ = client.write(protocol.Event{Type: eventType, ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
 }
 
 func (s *Server) deleteModel(client *clientConn, req protocol.Request) {

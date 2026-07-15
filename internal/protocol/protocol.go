@@ -116,11 +116,19 @@ func (r Request) ValidateModelInstall() error {
 }
 
 func (r Request) ValidateModelDownload() error {
+	return r.validateCatalogModelAction("download")
+}
+
+func (r Request) ValidateModelUpdate() error {
+	return r.validateCatalogModelAction("update")
+}
+
+func (r Request) validateCatalogModelAction(action string) error {
 	if r.Type != MessageModels {
 		return fmt.Errorf("request type must be models")
 	}
-	if r.Action != "download" {
-		return fmt.Errorf("models request action must be download")
+	if r.Action != action {
+		return fmt.Errorf("models request action must be %s", action)
 	}
 	if strings.TrimSpace(r.Model) == "" {
 		return fmt.Errorf("catalog variant is required")

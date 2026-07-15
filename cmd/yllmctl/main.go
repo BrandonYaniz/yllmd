@@ -219,6 +219,10 @@ func runModels(socketPath, modelDir string, args []string) {
 		runModelsInstall(socketPath, args[1:])
 		return
 	}
+	if len(args) >= 1 && args[0] == "update" {
+		runModelsUpdate(socketPath, args[1:])
+		return
+	}
 	if len(args) >= 1 && args[0] == "activate" {
 		runModelsActivate(socketPath, args[1:])
 		return
@@ -506,6 +510,36 @@ func catalogInstallSelection(id string, requested []string, all bool) ([]string,
 }
 
 func runCatalogInstalls(socketPath string, variants []string, acceptLicense, activate bool) {
+	runCatalogActions(socketPath, "download", variants, acceptLicense, activate)
+}
+
+func runModelsUpdate(socketPath string, args []string) {
+	if len(args) == 0 {
+		usage()
+		os.Exit(2)
+	}
+	variantID := args[0]
+	updateFlags := flag.NewFlagSet("models update", flag.ExitOnError)
+	activate := updateFlags.Bool("activate", false, "activate the qualified catalog revision")
+	acceptLicense := updateFlags.Bool("accept-license", false, "explicitly accept the model family's license terms")
+	if err := updateFlags.Parse(args[1:]); err != nil {
+		fatal(err)
+	}
+	if len(updateFlags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		fatal(err)
+	}
+	if _, _, ok := modelCatalog.Variant(variantID); !ok {
+		fatal(fmt.Errorf("model variant %q is not in the curated catalog", variantID))
+	}
+	runCatalogActions(socketPath, "update", []string{variantID}, *acceptLicense, *activate)
+}
+
+func runCatalogActions(socketPath, action string, variants []string, acceptLicense, activate bool) {
 	client, err := ipc.Dial(socketPath, 2*time.Second)
 	if err != nil {
 		fatal(err)
@@ -514,7 +548,7 @@ func runCatalogInstalls(socketPath string, variants []string, acceptLicense, act
 	for _, variant := range variants {
 		id := requestID(protocol.MessageModels)
 		if err := client.Send(protocol.Request{
-			Type: protocol.MessageModels, ID: id, Action: "download", Model: variant,
+			Type: protocol.MessageModels, ID: id, Action: action, Model: variant,
 			Activate: &activate, LicenseAccepted: acceptLicense,
 		}); err != nil {
 			fatal(err)
@@ -531,7 +565,7 @@ func runCatalogInstalls(socketPath string, variants []string, acceptLicense, act
 					percent = float64(event.DownloadedBytes) * 100 / float64(event.TotalBytes)
 				}
 				fmt.Fprintf(os.Stderr, "\rDownloading %s: %.1f%%", variant, percent)
-			case "installed":
+			case "installed", "updated", "up_to_date":
 				fmt.Fprintln(os.Stderr)
 				printJSON(event)
 				goto nextVariant
@@ -819,7 +853,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {
