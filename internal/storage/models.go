@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,11 @@ import (
 	"time"
 
 	"github.com/BrandonYaniz/yllmd/internal/config"
+)
+
+var (
+	ErrActiveVersion   = errors.New("cannot delete the active model version")
+	ErrRollbackVersion = errors.New("cannot delete the version retained for rollback")
 )
 
 type Activation struct {
@@ -42,6 +48,12 @@ type InstallResult struct {
 type RollbackResult struct {
 	ModelName string
 	VersionID string
+}
+
+type DeleteResult struct {
+	ModelName      string `json:"model_name"`
+	VersionID      string `json:"version_id,omitempty"`
+	ReclaimedBytes uint64 `json:"reclaimed_bytes"`
 }
 
 type VersionInfo struct {
@@ -310,6 +322,98 @@ func (s ModelStore) RollbackLatest(modelName string) (RollbackResult, error) {
 		versionID = filepath.Base(filepath.Clean(activation.PreviousTarget))
 	}
 	return RollbackResult{ModelName: modelName, VersionID: versionID}, nil
+}
+
+func (s ModelStore) DeleteVersion(modelName, versionID string) (DeleteResult, error) {
+	modelName = cleanPathPart(modelName)
+	versionID = cleanPathPart(versionID)
+	if modelName == "unnamed" || versionID == "unnamed" {
+		return DeleteResult{}, fmt.Errorf("model name and version id are required")
+	}
+	versionDir := s.VersionDir(modelName, versionID)
+	if info, err := os.Stat(versionDir); err != nil {
+		return DeleteResult{}, err
+	} else if !info.IsDir() {
+		return DeleteResult{}, fmt.Errorf("version path is not a directory: %s", versionDir)
+	}
+	if active, err := s.ActiveVersion(modelName); err == nil && active == versionID {
+		return DeleteResult{}, ErrActiveVersion
+	} else if err != nil && !os.IsNotExist(err) {
+		return DeleteResult{}, err
+	}
+	if rollback, err := s.rollbackTarget(modelName); err == nil && rollback == versionID {
+		return DeleteResult{}, ErrRollbackVersion
+	} else if err != nil && !os.IsNotExist(err) {
+		return DeleteResult{}, err
+	}
+	reclaimed, err := directorySize(versionDir)
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	if err := os.RemoveAll(versionDir); err != nil {
+		return DeleteResult{}, err
+	}
+	return DeleteResult{ModelName: modelName, VersionID: versionID, ReclaimedBytes: reclaimed}, nil
+}
+
+func (s ModelStore) DeleteModel(modelName string) (DeleteResult, error) {
+	modelName = cleanPathPart(modelName)
+	if modelName == "unnamed" {
+		return DeleteResult{}, fmt.Errorf("model name is required")
+	}
+	modelDir := s.ModelDir(modelName)
+	if info, err := os.Stat(modelDir); err != nil {
+		return DeleteResult{}, err
+	} else if !info.IsDir() {
+		return DeleteResult{}, fmt.Errorf("model path is not a directory: %s", modelDir)
+	}
+	if _, err := s.ActiveVersion(modelName); err == nil {
+		return DeleteResult{}, ErrActiveVersion
+	} else if !os.IsNotExist(err) {
+		return DeleteResult{}, err
+	}
+	reclaimed, err := directorySize(modelDir)
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	if err := os.RemoveAll(modelDir); err != nil {
+		return DeleteResult{}, err
+	}
+	return DeleteResult{ModelName: modelName, ReclaimedBytes: reclaimed}, nil
+}
+
+func (s ModelStore) rollbackTarget(modelName string) (string, error) {
+	data, err := os.ReadFile(s.RollbackPath(modelName))
+	if err != nil {
+		return "", err
+	}
+	var activation Activation
+	if err := json.Unmarshal(data, &activation); err != nil {
+		return "", err
+	}
+	if activation.PreviousTarget == "" {
+		return "", nil
+	}
+	return filepath.Base(filepath.Clean(activation.PreviousTarget)), nil
+}
+
+func directorySize(root string) (uint64, error) {
+	var total uint64
+	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += uint64(info.Size())
+		return nil
+	})
+	return total, err
 }
 
 func VerifySHA256(path, expectedHex string) error {

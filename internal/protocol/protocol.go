@@ -89,6 +89,7 @@ type Event struct {
 	QueueDepth      int               `json:"queue_depth,omitempty"`
 	DownloadedBytes uint64            `json:"downloaded_bytes,omitempty"`
 	TotalBytes      uint64            `json:"total_bytes,omitempty"`
+	ReclaimedBytes  uint64            `json:"reclaimed_bytes,omitempty"`
 }
 
 func (r Request) ValidateModelInstall() error {
@@ -122,6 +123,19 @@ func (r Request) ValidateModelDownload() error {
 	}
 	if strings.TrimSpace(r.Model) == "" {
 		return fmt.Errorf("catalog variant is required")
+	}
+	return nil
+}
+
+func (r Request) ValidateModelDelete() error {
+	if r.Type != MessageModels {
+		return fmt.Errorf("request type must be models")
+	}
+	if r.Action != "delete" {
+		return fmt.Errorf("models request action must be delete")
+	}
+	if strings.TrimSpace(r.Model) == "" {
+		return fmt.Errorf("model is required")
 	}
 	return nil
 }

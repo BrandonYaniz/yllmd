@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -271,6 +272,71 @@ func TestInstallLocalFileChecksumFailureCleansTemp(t *testing.T) {
 		if entry.IsDir() && len(entry.Name()) >= len(".install-") && entry.Name()[:len(".install-")] == ".install-" {
 			t.Fatalf("temporary install directory was not cleaned: %s", entry.Name())
 		}
+	}
+}
+
+func TestDeleteVersionReclaimsInactiveVersion(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	source, checksum := writeSourceModel(t, []byte("delete me"))
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "fast", VersionID: "v1", SourcePath: source, SHA256: checksum}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.DeleteVersion("fast", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReclaimedBytes < uint64(len("delete me")) {
+		t.Fatalf("reclaimed bytes = %d", result.ReclaimedBytes)
+	}
+	if _, err := os.Stat(store.VersionDir("fast", "v1")); !os.IsNotExist(err) {
+		t.Fatalf("version still exists: %v", err)
+	}
+}
+
+func TestDeleteVersionProtectsActiveAndRollbackVersions(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	first, firstChecksum := writeSourceModel(t, []byte("first"))
+	second, secondChecksum := writeSourceModel(t, []byte("second"))
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "fast", VersionID: "v1", SourcePath: first, SHA256: firstChecksum, Activate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "fast", VersionID: "v2", SourcePath: second, SHA256: secondChecksum, Activate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteVersion("fast", "v2"); !errors.Is(err, ErrActiveVersion) {
+		t.Fatalf("active delete error = %v", err)
+	}
+	if _, err := store.DeleteVersion("fast", "v1"); !errors.Is(err, ErrRollbackVersion) {
+		t.Fatalf("rollback delete error = %v", err)
+	}
+}
+
+func TestDeleteModelRequiresNoActiveVersion(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	source, checksum := writeSourceModel(t, []byte("model"))
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "fast", VersionID: "v1", SourcePath: source, SHA256: checksum, Activate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteModel("fast"); !errors.Is(err, ErrActiveVersion) {
+		t.Fatalf("active model delete error = %v", err)
+	}
+}
+
+func TestDeleteModelRemovesUnactivatedModel(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	source, checksum := writeSourceModel(t, []byte("model"))
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "extra", VersionID: "v1", SourcePath: source, SHA256: checksum}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.DeleteModel("extra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReclaimedBytes == 0 {
+		t.Fatal("expected reclaimed bytes")
+	}
+	if _, err := os.Stat(store.ModelDir("extra")); !os.IsNotExist(err) {
+		t.Fatalf("model still exists: %v", err)
 	}
 }
 

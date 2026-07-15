@@ -39,6 +39,11 @@ Use `yllmctl models activate <model> -version <id>` to switch to an already inst
 
 Use `yllmctl models versions <model>` to inspect installed versions, active state, checksum metadata, and storage paths.
 
+Use `yllmctl models delete <model> --version <id>` to remove an inactive version,
+or omit `--version` to remove an entire unconfigured installation. Active
+versions and rollback targets are protected. Removing a configured model
+requires changing its assignment first.
+
 Installed versions include:
 
 ```text

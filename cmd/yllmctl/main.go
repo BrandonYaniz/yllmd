@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -224,6 +225,10 @@ func runModels(socketPath, modelDir string, args []string) {
 	}
 	if len(args) >= 1 && args[0] == "rollback" {
 		runModelsRollback(socketPath, args[1:])
+		return
+	}
+	if len(args) >= 1 && args[0] == "delete" {
+		runModelsDelete(socketPath, args[1:])
 		return
 	}
 	usage()
@@ -588,6 +593,55 @@ func runModelsRollback(socketPath string, args []string) {
 	printJSON(event)
 }
 
+func runModelsDelete(socketPath string, args []string) {
+	if len(args) == 0 {
+		usage()
+		os.Exit(2)
+	}
+	model := args[0]
+	deleteFlags := flag.NewFlagSet("models delete", flag.ExitOnError)
+	version := deleteFlags.String("version", "", "delete only this installed version")
+	yes := deleteFlags.Bool("yes", false, "delete without an interactive confirmation")
+	if err := deleteFlags.Parse(args[1:]); err != nil {
+		fatal(err)
+	}
+	if len(deleteFlags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	if !*yes {
+		target := fmt.Sprintf("model %s and all of its installed versions", model)
+		if *version != "" {
+			target = fmt.Sprintf("version %s of model %s", *version, model)
+		}
+		fmt.Fprintf(os.Stderr, "Delete %s? [y/N] ", target)
+		answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return
+		}
+	}
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{
+		Type: protocol.MessageModels, ID: requestID(protocol.MessageModels), Action: "delete", Model: model, Version: *version,
+	}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	if event.Type == "deleted" {
+		fmt.Fprintf(os.Stderr, "Reclaimed %s.\n", compatibility.FormatBytes(event.ReclaimedBytes))
+	}
+	printJSON(event)
+}
+
 func runCancel(socketPath string, args []string) {
 	if len(args) != 1 {
 		usage()
@@ -727,7 +781,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {

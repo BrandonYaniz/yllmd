@@ -17,6 +17,7 @@ import (
 	artifactdownload "github.com/BrandonYaniz/yllmd/internal/download"
 	"github.com/BrandonYaniz/yllmd/internal/protocol"
 	"github.com/BrandonYaniz/yllmd/internal/providers"
+	"github.com/BrandonYaniz/yllmd/internal/storage"
 )
 
 func TestCancelMissingRequest(t *testing.T) {
@@ -228,6 +229,48 @@ func TestDownloadCatalogModelRequiresLicenseAcceptance(t *testing.T) {
 	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "download-1", Action: "download", Model: "licensed-fast"})
 	event := readMemoryEvent(t, client)
 	if event.Type != "error" || event.Code != "license_acceptance_required" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestDeleteUnconfiguredModel(t *testing.T) {
+	cfg := modelTestConfig(t)
+	store := storage.NewModelStore(cfg)
+	source, checksum := writeDaemonSourceModel(t, []byte("extra model"))
+	if _, err := store.InstallLocalFile(storage.InstallRequest{ModelName: "extra", VersionID: "v1", SourcePath: source, SHA256: checksum}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(cfg, nil, nil)
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "delete-1", Action: "delete", Model: "extra"})
+	event := readMemoryEvent(t, client)
+	if event.Type != "deleted" || event.Model != "extra" || event.ReclaimedBytes == 0 {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestDeleteConfiguredModelRequiresConfigurationChange(t *testing.T) {
+	server := NewServer(modelTestConfig(t), nil, nil)
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "delete-1", Action: "delete", Model: "fast"})
+	event := readMemoryEvent(t, client)
+	if event.Type != "error" || event.Code != "model_configured" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestDeleteInactiveVersionOfConfiguredModel(t *testing.T) {
+	cfg := modelTestConfig(t)
+	store := storage.NewModelStore(cfg)
+	source, checksum := writeDaemonSourceModel(t, []byte("old model"))
+	if _, err := store.InstallLocalFile(storage.InstallRequest{ModelName: "fast", VersionID: "old", SourcePath: source, SHA256: checksum}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(cfg, nil, nil)
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "delete-1", Action: "delete", Model: "fast", Version: "old"})
+	event := readMemoryEvent(t, client)
+	if event.Type != "deleted" || event.Version != "old" {
 		t.Fatalf("event = %#v", event)
 	}
 }

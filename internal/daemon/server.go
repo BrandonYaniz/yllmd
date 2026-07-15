@@ -193,6 +193,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 		s.installModel(client, req)
 	case "download":
 		s.downloadModel(client, req)
+	case "delete":
+		s.deleteModel(client, req)
 	case "activate":
 		s.activateModel(client, req)
 	case "versions":
@@ -317,6 +319,52 @@ func (s *Server) downloadModel(client *clientConn, req protocol.Request) {
 		s.reloadProvider()
 	}
 	_ = client.write(protocol.Event{Type: "installed", ID: req.ID, Model: result.ModelName, Version: result.VersionID, Path: result.ModelPath})
+}
+
+func (s *Server) deleteModel(client *clientConn, req protocol.Request) {
+	if err := req.ValidateModelDelete(); err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "invalid_request", Message: err.Error()})
+		return
+	}
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	store := storage.NewModelStore(s.cfg)
+	var (
+		result storage.DeleteResult
+		err    error
+	)
+	if req.Version != "" {
+		result, err = store.DeleteVersion(req.Model, req.Version)
+	} else {
+		if _, configuredErr := s.models.Resolve(req.Model); configuredErr == nil {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_configured", Message: "remove or replace the model's configuration assignment before deleting it"})
+			return
+		}
+		result, err = store.DeleteModel(req.Model)
+	}
+	if err != nil {
+		code := "delete_failed"
+		switch {
+		case errors.Is(err, storage.ErrActiveVersion):
+			code = "model_active"
+		case errors.Is(err, storage.ErrRollbackVersion):
+			code = "rollback_protected"
+		case os.IsNotExist(err):
+			code = "model_not_installed"
+		}
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: code, Message: err.Error()})
+		return
+	}
+	if req.Version == "" {
+		downloadDir := filepath.Join(s.cfg.Paths.StateDir, "downloads", req.Model)
+		if s.cfg.Paths.StateDir == "" {
+			downloadDir = filepath.Join(s.cfg.Paths.ModelDir, ".downloads", req.Model)
+		}
+		_ = os.RemoveAll(downloadDir)
+	}
+	_ = client.write(protocol.Event{
+		Type: "deleted", ID: req.ID, Model: result.ModelName, Version: result.VersionID, ReclaimedBytes: result.ReclaimedBytes,
+	})
 }
 
 func (s *Server) activateModel(client *clientConn, req protocol.Request) {

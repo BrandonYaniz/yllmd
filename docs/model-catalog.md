@@ -114,3 +114,18 @@ The legacy local-file installation path remains available:
 yllmctl models install local-name \
   -file model.gguf -version local-v1 -sha256 <digest>
 ```
+
+## Delete installed models
+
+Delete one inactive version or an entire unconfigured installation:
+
+```text
+yllmctl models delete qwen25-coder-7b-instruct --version <revision>
+yllmctl models delete qwen25-coder-7b-instruct
+```
+
+Deletion prompts for confirmation. Pass `--yes` for an intentional
+non-interactive operation. The daemon refuses to delete active versions,
+rollback targets, or an entire model that still has a configuration assignment.
+Change the assignment first, then retry. Successful deletion reports the bytes
+reclaimed from versioned model storage.

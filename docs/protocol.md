@@ -114,6 +114,8 @@ The `models` request supports:
 - `download`, download and install a qualified curated catalog variant. Progress
   is emitted as `download_progress` events with `downloaded_bytes` and
   `total_bytes`.
+- `delete`, delete an unconfigured installed model, or one inactive version when
+  `version` is supplied. Successful responses include `reclaimed_bytes`.
 - `activate`, switch `current` to an installed version while the daemon is idle.
 - `rollback`, restore the previous activation while the daemon is idle.
 
@@ -121,3 +123,6 @@ A `download` request uses the catalog variant ID in `model`. Families with
 custom terms require `license_accepted: true`. This field is an explicit
 acknowledgement for the current operation; persistent, versioned acceptance
 records are planned before custom-license artifacts become available.
+
+Deletion refuses to remove an active version, a version retained as the current
+rollback target, or an entire model that is still present in configuration.

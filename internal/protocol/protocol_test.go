@@ -42,6 +42,17 @@ func TestValidateModelDownload(t *testing.T) {
 	}
 }
 
+func TestValidateModelDelete(t *testing.T) {
+	req := Request{Type: MessageModels, ID: "models-1", Action: "delete", Model: "qwen25-coder-7b-instruct"}
+	if err := req.ValidateModelDelete(); err != nil {
+		t.Fatal(err)
+	}
+	req.Model = ""
+	if err := req.ValidateModelDelete(); err == nil {
+		t.Fatal("expected missing model error")
+	}
+}
+
 func TestValidateGenerateAcceptsMessages(t *testing.T) {
 	req := Request{
 		Type: MessageGenerate,
