@@ -1,5 +1,5 @@
 schema_version: 1
-catalog_version: "2026.07.3-draft"
+catalog_version: "2026.07.4-draft"
 
 # Entries remain planned until an exact GGUF artifact, immutable revision,
 # checksum, runner compatibility, and memory profile have been qualified.
@@ -117,7 +117,20 @@ families:
         level: fast
         parameter_count: 1B
         capabilities: [general_chat]
-        status: planned
+        status: available
+        recommended_ram_bytes: 4294967296
+        expected_storage_bytes: 807694464
+        artifact:
+          format: gguf
+          quantization: Q4_K_M
+          repository: bartowski/Llama-3.2-1B-Instruct-GGUF
+          revision: 067b946cf014b7c697f3654f621d577a3e3afd1c
+          url: https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+          filename: Llama-3.2-1B-Instruct-Q4_K_M.gguf
+          size_bytes: 807694464
+          sha256: 6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83
+          minimum_runner_version: "26.07.14.00"
+          prompt_template: llama3-instruct
       - id: llama32-3b-instruct
         name: Llama 3.2 3B Instruct
         model_type: llm

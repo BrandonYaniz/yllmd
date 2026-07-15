@@ -31,11 +31,11 @@ catalog's approved quantization rather than asking users to choose among GGUF
 quantization names.
 
 The initial qualified downloads are Qwen2.5-Coder 1.5B Instruct, Phi-4 Mini
-Instruct, and Gemma 3 1B Instruct. Qwen is sourced from its official GGUF
-repository, Phi from Bartowski's quantization of Microsoft's checkpoint, and
-Gemma from the llama.cpp organization's GGUF repository. Curated downloads pin
-an immutable upstream revision and verify the exact byte count and SHA-256
-digest before installation.
+Instruct, Gemma 3 1B Instruct, and Llama 3.2 1B Instruct. Qwen is sourced from
+its official GGUF repository, Phi and Llama from Bartowski quantizations of the
+publishers' checkpoints, and Gemma from the llama.cpp organization's GGUF
+repository. Curated downloads pin an immutable upstream revision and verify the
+exact byte count and SHA-256 digest before installation.
 
 The embedded catalog is currently a draft qualification list. Entries marked
 `planned` are not installable. An entry becomes `available` only after an exact

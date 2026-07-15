@@ -206,6 +206,8 @@ func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error)
 		return phi4ChatPrompt(input.Messages), nil
 	case "gemma3-chat":
 		return gemma3ChatPrompt(input.Messages)
+	case "llama3-instruct":
+		return llama3InstructPrompt(input.Messages), nil
 	default:
 		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
 	}
@@ -302,6 +304,20 @@ func gemma3ChatPrompt(messages []protocol.Message) (string, error) {
 	}
 	prompt.WriteString("<start_of_turn>model\n")
 	return prompt.String(), nil
+}
+
+func llama3InstructPrompt(messages []protocol.Message) string {
+	var prompt strings.Builder
+	prompt.WriteString("<|begin_of_text|>")
+	for _, message := range messages {
+		prompt.WriteString("<|start_header_id|>")
+		prompt.WriteString(message.Role)
+		prompt.WriteString("<|end_header_id|>\n\n")
+		prompt.WriteString(strings.TrimSpace(message.Content))
+		prompt.WriteString("<|eot_id|>")
+	}
+	prompt.WriteString("<|start_header_id|>assistant<|end_header_id|>\n\n")
+	return prompt.String()
 }
 
 type runnerStopFilter struct {

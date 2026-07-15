@@ -164,6 +164,23 @@ func TestRunnerPromptRejectsInvalidGemma3RoleOrder(t *testing.T) {
 	}
 }
 
+func TestRunnerPromptAppliesLlama3InstructTemplate(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "llama32-1b-instruct"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "Hello."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nBe concise.<|eot_id|>" +
+		"<|start_header_id|>user<|end_header_id|>\n\nHello.<|eot_id|>" +
+		"<|start_header_id|>assistant<|end_header_id|>\n\n"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
 func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runner.log")
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
