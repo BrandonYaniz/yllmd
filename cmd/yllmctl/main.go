@@ -349,6 +349,12 @@ func runCatalogVariants(modelDir string, args []string) {
 	fmt.Printf("Publisher: %s\n", family.Publisher)
 	fmt.Printf("Origin: %s\n", strings.Join(family.Countries, ", "))
 	fmt.Printf("License: %s\n", family.License.Name)
+	acceptance := "not required"
+	if family.License.AcceptanceRequired {
+		acceptance = "required before download"
+	}
+	fmt.Printf("License acceptance: %s\n", acceptance)
+	fmt.Printf("License terms: %s\n", family.License.TermsURL)
 	fmt.Printf("%s\n\n", family.Description)
 	fmt.Printf("Machine: %s %s · %s RAM · %s disk available\n",
 		profile.OS, profile.Architecture, formatDetectedBytes(profile.MemoryBytes), formatDetectedBytes(profile.AvailableDiskBytes))

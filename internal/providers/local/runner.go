@@ -202,6 +202,10 @@ func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error)
 		return plainMessagesPrompt(input.Messages), nil
 	case "qwen2.5-chatml":
 		return qwenChatMLPrompt(input.Messages), nil
+	case "phi4-chat":
+		return phi4ChatPrompt(input.Messages), nil
+	case "gemma3-chat":
+		return gemma3ChatPrompt(input.Messages)
 	default:
 		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
 	}
@@ -246,6 +250,58 @@ func qwenChatMLPrompt(messages []protocol.Message) string {
 	}
 	prompt.WriteString("<|im_start|>assistant\n")
 	return prompt.String()
+}
+
+func phi4ChatPrompt(messages []protocol.Message) string {
+	var prompt strings.Builder
+	for _, message := range messages {
+		prompt.WriteString("<|")
+		prompt.WriteString(message.Role)
+		prompt.WriteString("|>")
+		prompt.WriteString(message.Content)
+		prompt.WriteString("<|end|>")
+	}
+	prompt.WriteString("<|assistant|>")
+	return prompt.String()
+}
+
+func gemma3ChatPrompt(messages []protocol.Message) (string, error) {
+	if len(messages) == 0 {
+		return "", errors.New("Gemma 3 requires at least one message")
+	}
+	firstUserPrefix := ""
+	if messages[0].Role == "system" {
+		firstUserPrefix = strings.TrimSpace(messages[0].Content) + "\n\n"
+		messages = messages[1:]
+	}
+	if len(messages) == 0 {
+		return "", errors.New("Gemma 3 requires a user message after the system message")
+	}
+	var prompt strings.Builder
+	prompt.WriteString("<bos>")
+	for i, message := range messages {
+		expectedRole := "user"
+		outputRole := message.Role
+		if i%2 == 1 {
+			expectedRole = "assistant"
+		}
+		if message.Role != expectedRole {
+			return "", fmt.Errorf("Gemma 3 messages must alternate user and assistant; message %d has role %q", i, message.Role)
+		}
+		if outputRole == "assistant" {
+			outputRole = "model"
+		}
+		prompt.WriteString("<start_of_turn>")
+		prompt.WriteString(outputRole)
+		prompt.WriteByte('\n')
+		if i == 0 {
+			prompt.WriteString(firstUserPrefix)
+		}
+		prompt.WriteString(strings.TrimSpace(message.Content))
+		prompt.WriteString("<end_of_turn>\n")
+	}
+	prompt.WriteString("<start_of_turn>model\n")
+	return prompt.String(), nil
 }
 
 type runnerStopFilter struct {

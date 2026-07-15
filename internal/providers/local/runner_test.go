@@ -120,6 +120,50 @@ func TestRunnerPromptLeavesDirectPromptUnchanged(t *testing.T) {
 	}
 }
 
+func TestRunnerPromptAppliesPhi4ChatTemplate(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "phi4-mini-instruct"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "Hello."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|system|>Be concise.<|end|><|user|>Hello.<|end|><|assistant|>"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+func TestRunnerPromptAppliesGemma3ChatTemplate(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "gemma3-1b-it"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "First question."},
+		{Role: "assistant", Content: "First answer."},
+		{Role: "user", Content: "Second question."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<bos><start_of_turn>user\nBe concise.\n\nFirst question.<end_of_turn>\n" +
+		"<start_of_turn>model\nFirst answer.<end_of_turn>\n" +
+		"<start_of_turn>user\nSecond question.<end_of_turn>\n<start_of_turn>model\n"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+func TestRunnerPromptRejectsInvalidGemma3RoleOrder(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "gemma3-1b-it"}}
+	_, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "assistant", Content: "Wrong first role."},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "must alternate") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runner.log")
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)

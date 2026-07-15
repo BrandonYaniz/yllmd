@@ -23,6 +23,22 @@ func TestEmbeddedCatalogIsValid(t *testing.T) {
 	if variant.Artifact.SizeBytes != 1117320768 || variant.Artifact.SHA256 != "cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046" {
 		t.Fatalf("qualified artifact = %#v", variant.Artifact)
 	}
+	for id, expected := range map[string]struct {
+		size     uint64
+		checksum string
+		template string
+	}{
+		"phi4-mini-instruct": {2491874688, "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2", "phi4-chat"},
+		"gemma3-1b-it":       {806058240, "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", "gemma3-chat"},
+	} {
+		_, variant, ok := catalog.Variant(id)
+		if !ok || variant.Status != "available" || variant.Artifact == nil {
+			t.Fatalf("qualified variant %q = %#v, found = %t", id, variant, ok)
+		}
+		if variant.Artifact.SizeBytes != expected.size || variant.Artifact.SHA256 != expected.checksum || variant.Artifact.PromptTemplate != expected.template {
+			t.Fatalf("qualified artifact %q = %#v", id, variant.Artifact)
+		}
+	}
 }
 
 func TestDecodeRejectsDuplicateVariantIDs(t *testing.T) {

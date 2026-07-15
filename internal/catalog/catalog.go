@@ -180,7 +180,7 @@ func validateArtifact(artifact Artifact) error {
 	if artifact.MinimumRunner != "" && !runnerVersionPattern.MatchString(artifact.MinimumRunner) {
 		errs = append(errs, errors.New("minimum_runner_version must use YY.MM.DD.NN[-Release] format"))
 	}
-	if artifact.PromptTemplate != "qwen2.5-chatml" {
+	if !supportedPromptTemplate(artifact.PromptTemplate) {
 		errs = append(errs, fmt.Errorf("prompt_template %q is not supported", artifact.PromptTemplate))
 	}
 	parsedURL, err := url.Parse(artifact.URL)
@@ -190,6 +190,15 @@ func validateArtifact(artifact Artifact) error {
 		errs = append(errs, errors.New("url must pin the declared revision"))
 	}
 	return errors.Join(errs...)
+}
+
+func supportedPromptTemplate(template string) bool {
+	switch template {
+	case "qwen2.5-chatml", "phi4-chat", "gemma3-chat":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c Catalog) Family(id string) (Family, bool) {
