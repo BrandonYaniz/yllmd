@@ -275,6 +275,32 @@ func TestDeleteInactiveVersionOfConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestListInstalledModelsIncludesConfigurationState(t *testing.T) {
+	cfg := modelTestConfig(t)
+	store := storage.NewModelStore(cfg)
+	configuredSource, configuredChecksum := writeDaemonSourceModel(t, []byte("configured"))
+	extraSource, extraChecksum := writeDaemonSourceModel(t, []byte("extra"))
+	if _, err := store.InstallLocalFile(storage.InstallRequest{ModelName: "fast", VersionID: "v1", SourcePath: configuredSource, SHA256: configuredChecksum, Activate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallLocalFile(storage.InstallRequest{ModelName: "extra", VersionID: "v1", SourcePath: extraSource, SHA256: extraChecksum}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(cfg, nil, nil)
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{Type: protocol.MessageModels, ID: "installed-1", Action: "installed"})
+	event := readMemoryEvent(t, client)
+	if event.Type != "installed_models" || len(event.InstalledModels) != 2 {
+		t.Fatalf("event = %#v", event)
+	}
+	if event.InstalledModels[0].Name != "extra" || event.InstalledModels[0].Configured {
+		t.Fatalf("extra = %#v", event.InstalledModels[0])
+	}
+	if event.InstalledModels[1].Name != "fast" || !event.InstalledModels[1].Configured || event.InstalledModels[1].ActiveVersion != "v1" {
+		t.Fatalf("fast = %#v", event.InstalledModels[1])
+	}
+}
+
 func TestInstallModelWithoutActivationDoesNotReloadProvider(t *testing.T) {
 	cfg := modelTestConfig(t)
 	sourcePath, checksum := writeDaemonSourceModel(t, []byte("model bytes"))

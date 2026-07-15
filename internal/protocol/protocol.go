@@ -90,6 +90,7 @@ type Event struct {
 	DownloadedBytes uint64            `json:"downloaded_bytes,omitempty"`
 	TotalBytes      uint64            `json:"total_bytes,omitempty"`
 	ReclaimedBytes  uint64            `json:"reclaimed_bytes,omitempty"`
+	InstalledModels []InstalledModel  `json:"installed_models,omitempty"`
 }
 
 func (r Request) ValidateModelInstall() error {
@@ -217,6 +218,14 @@ type ModelVersion struct {
 	ChecksumPath string `json:"checksum_path,omitempty"`
 	SHA256       string `json:"sha256,omitempty"`
 	InstalledAt  string `json:"installed_at,omitempty"`
+}
+
+type InstalledModel struct {
+	Name           string         `json:"name"`
+	Configured     bool           `json:"configured"`
+	ActiveVersion  string         `json:"active_version,omitempty"`
+	InstalledBytes uint64         `json:"installed_bytes"`
+	Versions       []ModelVersion `json:"versions"`
 }
 
 type ModelID struct {

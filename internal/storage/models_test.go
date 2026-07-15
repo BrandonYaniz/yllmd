@@ -240,6 +240,28 @@ func TestListVersions(t *testing.T) {
 	}
 }
 
+func TestListInstalledModelsIncludesUnconfiguredModels(t *testing.T) {
+	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
+	first, firstChecksum := writeSourceModel(t, []byte("first"))
+	second, secondChecksum := writeSourceModel(t, []byte("second"))
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "zeta", VersionID: "v1", SourcePath: first, SHA256: firstChecksum}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallLocalFile(InstallRequest{ModelName: "alpha", VersionID: "v1", SourcePath: second, SHA256: secondChecksum, Activate: true}); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.ListInstalledModels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installed) != 2 || installed[0].ModelName != "alpha" || installed[1].ModelName != "zeta" {
+		t.Fatalf("installed = %#v", installed)
+	}
+	if installed[0].ActiveVersion != "v1" || installed[0].InstalledBytes == 0 {
+		t.Fatalf("alpha = %#v", installed[0])
+	}
+}
+
 func TestInstallLocalFileRejectsDuplicateVersion(t *testing.T) {
 	store := NewModelStore(config.Config{Paths: config.PathsConfig{ModelDir: t.TempDir()}})
 	source, checksum := writeSourceModel(t, []byte("installed model"))

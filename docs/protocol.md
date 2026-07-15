@@ -109,6 +109,8 @@ The protocol reserves these provider names for future releases:
 The `models` request supports:
 
 - `list`, list configured models.
+- `installed`, list all installed models and versions, including models not
+  present in configuration.
 - `versions`, list installed versions for one configured model.
 - `install`, install a local GGUF file as a version.
 - `download`, download and install a qualified curated catalog variant. Progress

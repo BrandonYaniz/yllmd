@@ -65,6 +65,13 @@ type VersionInfo struct {
 	Manifest     *Manifest
 }
 
+type InstalledModelInfo struct {
+	ModelName      string
+	ActiveVersion  string
+	Versions       []VersionInfo
+	InstalledBytes uint64
+}
+
 type Manifest struct {
 	ModelName   string    `json:"model_name"`
 	VersionID   string    `json:"version_id"`
@@ -246,6 +253,39 @@ func (s ModelStore) ListVersions(modelName string) ([]VersionInfo, error) {
 		return versions[i].VersionID < versions[j].VersionID
 	})
 	return versions, nil
+}
+
+func (s ModelStore) ListInstalledModels() ([]InstalledModelInfo, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	installed := make([]InstalledModelInfo, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		versions, err := s.ListVersions(entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		if len(versions) == 0 {
+			continue
+		}
+		size, err := directorySize(s.ModelDir(entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		active, _ := s.ActiveVersion(entry.Name())
+		installed = append(installed, InstalledModelInfo{
+			ModelName: entry.Name(), ActiveVersion: active, Versions: versions, InstalledBytes: size,
+		})
+	}
+	sort.Slice(installed, func(i, j int) bool { return installed[i].ModelName < installed[j].ModelName })
+	return installed, nil
 }
 
 func (s ModelStore) ActivateVersion(modelName, versionID string) (Activation, error) {

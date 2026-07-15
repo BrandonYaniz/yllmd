@@ -199,6 +199,10 @@ func runSingle(socketPath string, messageType protocol.MessageType) {
 }
 
 func runModels(socketPath, modelDir string, args []string) {
+	if len(args) == 1 && args[0] == "installed" {
+		runModelsInstalled(socketPath)
+		return
+	}
 	if len(args) >= 1 && (args[0] == "families" || args[0] == "available") {
 		runCatalogFamilies(args[1:])
 		return
@@ -233,6 +237,40 @@ func runModels(socketPath, modelDir string, args []string) {
 	}
 	usage()
 	os.Exit(2)
+}
+
+func runModelsInstalled(socketPath string) {
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{Type: protocol.MessageModels, ID: requestID(protocol.MessageModels), Action: "installed"}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	if event.Type == "error" {
+		printJSON(event)
+		return
+	}
+	if len(event.InstalledModels) == 0 {
+		fmt.Println("No models are installed.")
+		return
+	}
+	fmt.Printf("%-34s %-12s %-10s %-10s %s\n", "MODEL", "ACTIVE", "VERSIONS", "STORAGE", "CONFIGURED")
+	for _, model := range event.InstalledModels {
+		active := model.ActiveVersion
+		if active == "" {
+			active = "-"
+		} else if len(active) > 12 {
+			active = active[:12]
+		}
+		fmt.Printf("%-34s %-12s %-10d %-10s %t\n",
+			model.Name, active, len(model.Versions), compatibility.FormatBytes(model.InstalledBytes), model.Configured)
+	}
 }
 
 func runCatalogFamilies(args []string) {
@@ -781,7 +819,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {

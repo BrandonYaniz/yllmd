@@ -117,6 +117,16 @@ yllmctl models install local-name \
 
 ## Delete installed models
 
+List every installed model, including catalog variants that are not assigned in
+configuration:
+
+```text
+yllmctl models installed
+```
+
+The inventory reports active version, version count, storage use, and whether
+the model is configured.
+
 Delete one inactive version or an entire unconfigured installation:
 
 ```text

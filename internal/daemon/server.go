@@ -189,6 +189,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 	switch req.Action {
 	case "", "list":
 		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors()})
+	case "installed":
+		s.listInstalledModels(client, req)
 	case "install":
 		s.installModel(client, req)
 	case "download":
@@ -204,6 +206,25 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 	default:
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "unknown_models_action", Message: fmt.Sprintf("unsupported models action %q", req.Action)})
 	}
+}
+
+func (s *Server) listInstalledModels(client *clientConn, req protocol.Request) {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	installed, err := storage.NewModelStore(s.cfg).ListInstalledModels()
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "installed_models_failed", Message: err.Error()})
+		return
+	}
+	models := make([]protocol.InstalledModel, 0, len(installed))
+	for _, item := range installed {
+		_, configuredErr := s.models.Resolve(item.ModelName)
+		models = append(models, protocol.InstalledModel{
+			Name: item.ModelName, Configured: configuredErr == nil, ActiveVersion: item.ActiveVersion,
+			InstalledBytes: item.InstalledBytes, Versions: modelVersions(item.Versions),
+		})
+	}
+	_ = client.write(protocol.Event{Type: "installed_models", ID: req.ID, InstalledModels: models})
 }
 
 func (s *Server) installModel(client *clientConn, req protocol.Request) {
