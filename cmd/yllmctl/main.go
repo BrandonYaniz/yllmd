@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,6 +212,10 @@ func runModels(socketPath, modelDir string, args []string) {
 	}
 	if len(args) >= 1 && args[0] == "variants" {
 		runCatalogVariants(modelDir, args[1:])
+		return
+	}
+	if len(args) >= 1 && args[0] == "choose" {
+		runModelsChoose(socketPath, modelDir, args[1:])
 		return
 	}
 	if len(args) == 1 && args[0] == "licenses" {
@@ -423,6 +430,180 @@ func formatDetectedBytes(bytes uint64) string {
 		return "unknown"
 	}
 	return compatibility.FormatBytes(bytes)
+}
+
+func runModelsChoose(socketPath, modelDir string, args []string) {
+	flags := flag.NewFlagSet("models choose", flag.ExitOnError)
+	activate := flags.Bool("activate", false, "activate each installed variant when configured")
+	if err := flags.Parse(args); err != nil {
+		fatal(err)
+	}
+	if len(flags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		fatal(err)
+	}
+	profile, err := machine.Detect(modelDir)
+	if err != nil {
+		fatal(err)
+	}
+	variants, acceptLicense, err := guidedModelSelection(os.Stdin, os.Stdout, modelCatalog, profile)
+	if err != nil {
+		fatal(err)
+	}
+	runCatalogInstalls(socketPath, variants, acceptLicense, *activate)
+}
+
+func guidedModelSelection(input io.Reader, output io.Writer, modelCatalog catalog.Catalog, profile machine.Profile) ([]string, bool, error) {
+	families := modelCatalog.SortedFamilies()
+	installable := make([]catalog.Family, 0, len(families))
+	for _, family := range families {
+		for _, variant := range family.Variants {
+			if variant.Status == "available" {
+				installable = append(installable, family)
+				break
+			}
+		}
+	}
+	if len(installable) == 0 {
+		return nil, false, errors.New("the curated catalog has no qualified model variants")
+	}
+
+	scanner := bufio.NewScanner(input)
+	fmt.Fprintf(output, "Available model families (catalog %s)\n\n", modelCatalog.CatalogVersion)
+	for index, family := range installable {
+		available := 0
+		for _, variant := range family.Variants {
+			if variant.Status == "available" {
+				available++
+			}
+		}
+		fmt.Fprintf(output, "%2d) %-18s %s (%d available)\n", index+1, family.ID, family.Name, available)
+	}
+	fmt.Fprint(output, "\nChoose a family by number or ID: ")
+	if !scanner.Scan() {
+		return nil, false, selectionReadError(scanner.Err())
+	}
+	family, err := selectedFamily(strings.TrimSpace(scanner.Text()), installable)
+	if err != nil {
+		return nil, false, err
+	}
+
+	available := make([]catalog.Variant, 0, len(family.Variants))
+	fmt.Fprintf(output, "\n%s\nPublisher: %s\nOrigin: %s\nLicense: %s\nTerms: %s\n\n",
+		family.Name, family.Publisher, strings.Join(family.Countries, ", "), family.License.Name, family.License.TermsURL)
+	fmt.Fprintf(output, "%-4s %-34s %-10s %-10s %-5s\n", "#", "VARIANT", "STORAGE", "RAM", "FIT")
+	for _, variant := range family.Variants {
+		if variant.Status != "available" {
+			continue
+		}
+		available = append(available, variant)
+		assessment, err := compatibility.Assess(variant, profile)
+		if err != nil {
+			return nil, false, err
+		}
+		fit := "unknown"
+		if assessment.CompatibilityKnown {
+			fit = "yes"
+			if !assessment.Compatible {
+				fit = "no"
+			}
+		}
+		fmt.Fprintf(output, "%-4d %-34s %-10s %-10s %-5s\n", len(available), variant.ID,
+			compatibility.FormatBytes(assessment.Requirements.StorageBytes),
+			compatibility.FormatBytes(assessment.Requirements.RecommendedRAM), fit)
+	}
+	fmt.Fprint(output, "\nChoose one or more variants (comma-separated numbers or IDs), or all: ")
+	if !scanner.Scan() {
+		return nil, false, selectionReadError(scanner.Err())
+	}
+	selected, err := selectedVariants(strings.TrimSpace(scanner.Text()), available)
+	if err != nil {
+		return nil, false, err
+	}
+
+	acceptLicense := false
+	if family.License.AcceptanceRequired {
+		fmt.Fprintf(output, "Accept %s at %s? [y/N]: ", family.License.Name, family.License.TermsURL)
+		if !scanner.Scan() {
+			return nil, false, selectionReadError(scanner.Err())
+		}
+		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if answer != "y" && answer != "yes" {
+			return nil, false, errors.New("license terms were not accepted")
+		}
+		acceptLicense = true
+	}
+	return selected, acceptLicense, nil
+}
+
+func selectedFamily(choice string, families []catalog.Family) (catalog.Family, error) {
+	if number, err := strconv.Atoi(choice); err == nil {
+		if number >= 1 && number <= len(families) {
+			return families[number-1], nil
+		}
+		return catalog.Family{}, fmt.Errorf("family number %d is out of range", number)
+	}
+	for _, family := range families {
+		if family.ID == choice {
+			return family, nil
+		}
+	}
+	return catalog.Family{}, fmt.Errorf("model family %q is not an available curated family", choice)
+}
+
+func selectedVariants(choice string, variants []catalog.Variant) ([]string, error) {
+	if strings.EqualFold(choice, "all") {
+		selected := make([]string, len(variants))
+		for index, variant := range variants {
+			selected[index] = variant.ID
+		}
+		return selected, nil
+	}
+	parts := strings.FieldsFunc(choice, func(character rune) bool {
+		return character == ',' || character == ' ' || character == '\t'
+	})
+	if len(parts) == 0 {
+		return nil, errors.New("choose at least one model variant")
+	}
+	selected := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		variantID := part
+		if number, err := strconv.Atoi(part); err == nil {
+			if number < 1 || number > len(variants) {
+				return nil, fmt.Errorf("variant number %d is out of range", number)
+			}
+			variantID = variants[number-1].ID
+		} else {
+			found := false
+			for _, variant := range variants {
+				if variant.ID == variantID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("model variant %q is not available in the selected family", variantID)
+			}
+		}
+		if _, exists := seen[variantID]; exists {
+			return nil, fmt.Errorf("variant %q was selected more than once", variantID)
+		}
+		seen[variantID] = struct{}{}
+		selected = append(selected, variantID)
+	}
+	return selected, nil
+}
+
+func selectionReadError(err error) error {
+	if err != nil {
+		return fmt.Errorf("read model selection: %w", err)
+	}
+	return errors.New("model selection ended before a choice was entered")
 }
 
 func runModelsInstall(socketPath string, args []string) {
@@ -890,7 +1071,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models licenses|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models choose|models licenses|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {

@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/BrandonYaniz/yllmd/internal/catalog"
+	"github.com/BrandonYaniz/yllmd/internal/machine"
+)
 
 func TestCatalogInstallSelectionDirectVariant(t *testing.T) {
 	selected, err := catalogInstallSelection("qwen25-coder-7b-instruct", nil, false)
@@ -44,5 +51,50 @@ func TestCatalogInstallSelectionAllIncludesOnlyQualifiedVariants(t *testing.T) {
 	}
 	if len(selected) != 1 || selected[0] != "qwen25-coder-1.5b-instruct" {
 		t.Fatalf("selected = %#v", selected)
+	}
+}
+
+func TestSelectedVariantsSupportsNumbersIDsAndAll(t *testing.T) {
+	variants := []catalog.Variant{{ID: "small"}, {ID: "large"}}
+	selected, err := selectedVariants("1, large", variants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(selected, ",") != "small,large" {
+		t.Fatalf("selected = %#v", selected)
+	}
+	selected, err = selectedVariants("all", variants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(selected, ",") != "small,large" {
+		t.Fatalf("all selected = %#v", selected)
+	}
+}
+
+func TestSelectedVariantsRejectsDuplicate(t *testing.T) {
+	variants := []catalog.Variant{{ID: "small"}, {ID: "large"}}
+	if _, err := selectedVariants("1,small", variants); err == nil {
+		t.Fatal("expected duplicate selection error")
+	}
+}
+
+func TestGuidedModelSelectionAcceptsRequiredLicense(t *testing.T) {
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	selected, accepted, err := guidedModelSelection(strings.NewReader("google-gemma\nall\nyes\n"), &output, modelCatalog, machine.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(selected, ",") != "gemma3-1b-it" || !accepted {
+		t.Fatalf("selected = %#v, accepted = %t", selected, accepted)
+	}
+	for _, expected := range []string{"Available model families", "Google Gemma", "Gemma Terms of Use", "gemma3-1b-it"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("output missing %q:\n%s", expected, output.String())
+		}
 	}
 }

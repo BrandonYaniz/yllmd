@@ -19,6 +19,19 @@ family ID:
 yllmctl models variants qwen-coder --json
 ```
 
+For a guided family and variant picker that proceeds directly to installation,
+run:
+
+```text
+yllmctl models choose
+```
+
+The picker lists only families with qualified downloads, then shows the chosen
+family's available variants with storage, RAM, and machine-fit information.
+Choose one or more numbered variants, enter their IDs, or enter `all`. When a
+family requires explicit license acceptance, the terms URL and confirmation
+are presented before any download begins.
+
 The variants view detects the current machine and shows estimated Q4_K_M
 storage and memory requirements. If a hardware probe is unavailable, the CLI
 reports the warning and displays compatibility as unknown rather than rejecting
