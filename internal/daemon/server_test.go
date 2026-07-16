@@ -317,6 +317,55 @@ func TestDownloadCatalogModelRequiresLicenseAcceptance(t *testing.T) {
 	}
 }
 
+func TestDownloadCatalogModelPersistsLicenseAcceptance(t *testing.T) {
+	cfg := modelTestConfig(t)
+	cfg.Paths.StateDir = t.TempDir()
+	content := []byte("licensed catalog model")
+	sum := sha256.Sum256(content)
+	checksum := hex.EncodeToString(sum[:])
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	server := NewServer(cfg, nil, nil)
+	server.catalog = catalog.Catalog{CatalogVersion: "2026.07.4-draft", Families: []catalog.Family{{
+		ID: "licensed", Name: "Licensed", License: catalog.License{
+			Name: "Custom Terms", TermsURL: "https://example.com/terms", AcceptanceRequired: true,
+		},
+		Variants: []catalog.Variant{{ID: "licensed-fast", Status: "available", Artifact: &catalog.Artifact{
+			Filename: "model.gguf", SizeBytes: uint64(len(content)), SHA256: checksum, Revision: revision,
+		}}},
+	}}}
+	server.downloader = &fakeArtifactDownloader{content: content}
+	activate := false
+	client := newMemoryClient()
+	server.handleModels(client, protocol.Request{
+		Type: protocol.MessageModels, ID: "download-1", Action: "download", Model: "licensed-fast",
+		Activate: &activate, LicenseAccepted: true,
+	})
+	events := readMemoryEvents(t, client)
+	if len(events) != 2 || events[1].Type != "installed" {
+		t.Fatalf("events = %#v", events)
+	}
+	accepted, record, err := storage.NewLicenseStore(cfg).Accepted("licensed", "Custom Terms", "https://example.com/terms")
+	if err != nil || !accepted || record == nil || record.CatalogVersion != "2026.07.4-draft" {
+		t.Fatalf("acceptance = %t, %#v, %v", accepted, record, err)
+	}
+
+	listClient := newMemoryClient()
+	server.handleModels(listClient, protocol.Request{Type: protocol.MessageModels, ID: "licenses-1", Action: "licenses"})
+	listed := readMemoryEvent(t, listClient)
+	if listed.Type != "licenses" || len(listed.AcceptedLicenses) != 1 || listed.AcceptedLicenses[0].FamilyID != "licensed" {
+		t.Fatalf("listed = %#v", listed)
+	}
+
+	retryClient := newMemoryClient()
+	server.handleModels(retryClient, protocol.Request{
+		Type: protocol.MessageModels, ID: "download-2", Action: "download", Model: "licensed-fast", Activate: &activate,
+	})
+	retry := readMemoryEvent(t, retryClient)
+	if retry.Code != "version_exists" {
+		t.Fatalf("retry = %#v", retry)
+	}
+}
+
 func TestDeleteUnconfiguredModel(t *testing.T) {
 	cfg := modelTestConfig(t)
 	store := storage.NewModelStore(cfg)

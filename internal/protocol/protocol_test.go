@@ -302,6 +302,24 @@ func TestWriteVersionsEvent(t *testing.T) {
 	}
 }
 
+func TestWriteAcceptedLicensesEvent(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteEvent(&buf, Event{Type: "licenses", AcceptedLicenses: []AcceptedLicense{{
+		FamilyID: "google-gemma", LicenseName: "Gemma Terms", TermsURL: "https://example.com/terms",
+		CatalogVersion: "2026.07.4-draft", AcceptedAt: "2026-07-15T00:00:00Z",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event Event
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
+		t.Fatal(err)
+	}
+	if len(event.AcceptedLicenses) != 1 || event.AcceptedLicenses[0].FamilyID != "google-gemma" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
 func TestWriteModelsEvent(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteEvent(&buf, Event{

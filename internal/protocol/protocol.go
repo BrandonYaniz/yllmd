@@ -69,28 +69,29 @@ type QueueOptions struct {
 }
 
 type Event struct {
-	Type            string            `json:"type"`
-	ID              string            `json:"id,omitempty"`
-	QueuePosition   int               `json:"queue_position,omitempty"`
-	Provider        string            `json:"provider,omitempty"`
-	Model           string            `json:"model,omitempty"`
-	Version         string            `json:"version,omitempty"`
-	Versions        []ModelVersion    `json:"versions,omitempty"`
-	Path            string            `json:"path,omitempty"`
-	Models          []ModelDescriptor `json:"models,omitempty"`
-	Text            string            `json:"text,omitempty"`
-	FinishReason    string            `json:"finish_reason,omitempty"`
-	Usage           *Usage            `json:"usage,omitempty"`
-	Code            string            `json:"code,omitempty"`
-	Message         string            `json:"message,omitempty"`
-	Status          string            `json:"status,omitempty"`
-	Daemon          *DaemonStatus     `json:"daemon,omitempty"`
-	LoadedModel     string            `json:"loaded_model,omitempty"`
-	QueueDepth      int               `json:"queue_depth,omitempty"`
-	DownloadedBytes uint64            `json:"downloaded_bytes,omitempty"`
-	TotalBytes      uint64            `json:"total_bytes,omitempty"`
-	ReclaimedBytes  uint64            `json:"reclaimed_bytes,omitempty"`
-	InstalledModels []InstalledModel  `json:"installed_models,omitempty"`
+	Type             string            `json:"type"`
+	ID               string            `json:"id,omitempty"`
+	QueuePosition    int               `json:"queue_position,omitempty"`
+	Provider         string            `json:"provider,omitempty"`
+	Model            string            `json:"model,omitempty"`
+	Version          string            `json:"version,omitempty"`
+	Versions         []ModelVersion    `json:"versions,omitempty"`
+	Path             string            `json:"path,omitempty"`
+	Models           []ModelDescriptor `json:"models,omitempty"`
+	Text             string            `json:"text,omitempty"`
+	FinishReason     string            `json:"finish_reason,omitempty"`
+	Usage            *Usage            `json:"usage,omitempty"`
+	Code             string            `json:"code,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	Status           string            `json:"status,omitempty"`
+	Daemon           *DaemonStatus     `json:"daemon,omitempty"`
+	LoadedModel      string            `json:"loaded_model,omitempty"`
+	QueueDepth       int               `json:"queue_depth,omitempty"`
+	DownloadedBytes  uint64            `json:"downloaded_bytes,omitempty"`
+	TotalBytes       uint64            `json:"total_bytes,omitempty"`
+	ReclaimedBytes   uint64            `json:"reclaimed_bytes,omitempty"`
+	InstalledModels  []InstalledModel  `json:"installed_models,omitempty"`
+	AcceptedLicenses []AcceptedLicense `json:"accepted_licenses,omitempty"`
 }
 
 func (r Request) ValidateModelInstall() error {
@@ -234,6 +235,14 @@ type InstalledModel struct {
 	ActiveVersion  string         `json:"active_version,omitempty"`
 	InstalledBytes uint64         `json:"installed_bytes"`
 	Versions       []ModelVersion `json:"versions"`
+}
+
+type AcceptedLicense struct {
+	FamilyID       string `json:"family_id"`
+	LicenseName    string `json:"license_name"`
+	TermsURL       string `json:"terms_url"`
+	CatalogVersion string `json:"catalog_version"`
+	AcceptedAt     string `json:"accepted_at"`
 }
 
 type ModelID struct {

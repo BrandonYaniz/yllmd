@@ -121,9 +121,15 @@ downloads and verifies it as a new installed version. Pass `-activate` to make
 the qualified revision current; activation still requires a configured model
 and an idle daemon, and preserves the previous version for rollback.
 
-For a family requiring explicit terms, pass `-accept-license` after reviewing
-the license shown by `models variants`. Persistent versioned acceptance records
-remain required before any custom-license catalog entry is qualified.
+For a family requiring explicit terms, pass `-accept-license` once after
+reviewing the license shown by `models variants`. The daemon persists the family,
+license name, exact terms URL, catalog version, and acceptance timestamp. Later
+downloads and updates reuse that record; a changed license name or terms URL
+requires explicit acceptance again. Inspect stored records with:
+
+```text
+yllmctl models licenses
+```
 
 The legacy local-file installation path remains available:
 

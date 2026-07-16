@@ -111,6 +111,7 @@ The `models` request supports:
 - `list`, list configured models.
 - `installed`, list all installed models and versions, including models not
   present in configuration.
+- `licenses`, list persisted model-family license acceptance records.
 - `versions`, list installed versions for one configured model.
 - `install`, install a local GGUF file as a version.
 - `download`, download and install a qualified curated catalog variant. Progress
@@ -124,10 +125,10 @@ The `models` request supports:
 - `activate`, switch `current` to an installed version while the daemon is idle.
 - `rollback`, restore the previous activation while the daemon is idle.
 
-A `download` or `update` request uses the catalog variant ID in `model`. Families with
-custom terms require `license_accepted: true`. This field is an explicit
-acknowledgement for the current operation; persistent, versioned acceptance
-records are planned before custom-license artifacts become available.
+A `download` or `update` request uses the catalog variant ID in `model`. Families
+with custom terms require `license_accepted: true` the first time. The daemon
+persists acceptance against the exact family, license name, and terms URL; a
+terms change requires renewed acceptance.
 
 Deletion refuses to remove an active version, a version retained as the current
 rollback target, or an entire model that is still present in configuration.

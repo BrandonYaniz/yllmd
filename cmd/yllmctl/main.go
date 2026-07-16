@@ -211,6 +211,10 @@ func runModels(socketPath, modelDir string, args []string) {
 		runCatalogVariants(modelDir, args[1:])
 		return
 	}
+	if len(args) == 1 && args[0] == "licenses" {
+		runModelsLicenses(socketPath)
+		return
+	}
 	if len(args) == 1 && args[0] == "list" {
 		runSingle(socketPath, protocol.MessageModels)
 		return
@@ -274,6 +278,33 @@ func runModelsInstalled(socketPath string) {
 		}
 		fmt.Printf("%-34s %-12s %-10d %-10s %t\n",
 			model.Name, active, len(model.Versions), compatibility.FormatBytes(model.InstalledBytes), model.Configured)
+	}
+}
+
+func runModelsLicenses(socketPath string) {
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{Type: protocol.MessageModels, ID: requestID(protocol.MessageModels), Action: "licenses"}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	if event.Type == "error" {
+		printJSON(event)
+		return
+	}
+	if len(event.AcceptedLicenses) == 0 {
+		fmt.Println("No model licenses have been accepted.")
+		return
+	}
+	fmt.Printf("%-20s %-24s %-22s %s\n", "FAMILY", "LICENSE", "ACCEPTED", "TERMS")
+	for _, license := range event.AcceptedLicenses {
+		fmt.Printf("%-20s %-24s %-22s %s\n", license.FamilyID, license.LicenseName, license.AcceptedAt, license.TermsURL)
 	}
 }
 
@@ -859,7 +890,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models licenses|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {

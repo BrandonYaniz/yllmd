@@ -191,6 +191,8 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors()})
 	case "installed":
 		s.listInstalledModels(client, req)
+	case "licenses":
+		s.listAcceptedLicenses(client, req)
 	case "install":
 		s.installModel(client, req)
 	case "download":
@@ -208,6 +210,23 @@ func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 	default:
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "unknown_models_action", Message: fmt.Sprintf("unsupported models action %q", req.Action)})
 	}
+}
+
+func (s *Server) listAcceptedLicenses(client *clientConn, req protocol.Request) {
+	acceptances, err := storage.NewLicenseStore(s.cfg).List()
+	if err != nil {
+		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "license_list_failed", Message: err.Error()})
+		return
+	}
+	licenses := make([]protocol.AcceptedLicense, 0, len(acceptances))
+	for _, acceptance := range acceptances {
+		licenses = append(licenses, protocol.AcceptedLicense{
+			FamilyID: acceptance.FamilyID, LicenseName: acceptance.LicenseName,
+			TermsURL: acceptance.TermsURL, CatalogVersion: acceptance.CatalogVersion,
+			AcceptedAt: acceptance.AcceptedAt.Format(time.RFC3339),
+		})
+	}
+	_ = client.write(protocol.Event{Type: "licenses", ID: req.ID, AcceptedLicenses: licenses})
 }
 
 func (s *Server) listInstalledModels(client *clientConn, req protocol.Request) {
@@ -287,9 +306,23 @@ func (s *Server) installCatalogArtifact(client *clientConn, req protocol.Request
 		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "model_not_qualified", Message: fmt.Sprintf("catalog variant %q has not completed artifact qualification", variant.ID)})
 		return
 	}
-	if family.License.AcceptanceRequired && !req.LicenseAccepted {
-		_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "license_acceptance_required", Message: fmt.Sprintf("%s requires explicit acceptance of %s", family.Name, family.License.Name)})
-		return
+	if family.License.AcceptanceRequired {
+		licenseStore := storage.NewLicenseStore(s.cfg)
+		accepted, _, err := licenseStore.Accepted(family.ID, family.License.Name, family.License.TermsURL)
+		if err != nil {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "license_check_failed", Message: err.Error()})
+			return
+		}
+		if !accepted && !req.LicenseAccepted {
+			_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "license_acceptance_required", Message: fmt.Sprintf("%s requires explicit acceptance of %s at %s", family.Name, family.License.Name, family.License.TermsURL)})
+			return
+		}
+		if !accepted {
+			if _, err := licenseStore.Accept(family.ID, family.License.Name, family.License.TermsURL, s.catalog.CatalogVersion); err != nil {
+				_ = client.write(protocol.Event{Type: "error", ID: req.ID, Code: "license_acceptance_failed", Message: err.Error()})
+				return
+			}
+		}
 	}
 	activate := req.Activate != nil && *req.Activate
 	if activate {
