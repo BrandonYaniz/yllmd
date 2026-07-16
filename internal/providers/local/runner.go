@@ -210,6 +210,8 @@ func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error)
 		return llama3InstructPrompt(input.Messages), nil
 	case "granite3-chat":
 		return granite3ChatPrompt(input.Messages, time.Now())
+	case "mistral-nemo-instruct":
+		return mistralNemoInstructPrompt(input.Messages)
 	default:
 		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
 	}
@@ -349,6 +351,45 @@ func granite3ChatPrompt(messages []protocol.Message, now time.Time) (string, err
 		prompt.WriteString("<|end_of_text|>\n")
 	}
 	prompt.WriteString("<|start_of_role|>assistant<|end_of_role|>")
+	return prompt.String(), nil
+}
+
+func mistralNemoInstructPrompt(messages []protocol.Message) (string, error) {
+	if len(messages) == 0 {
+		return "", errors.New("Mistral Nemo requires at least one message")
+	}
+	systemMessage := ""
+	if messages[0].Role == "system" {
+		systemMessage = messages[0].Content
+		messages = messages[1:]
+	}
+	if len(messages) == 0 {
+		return "", errors.New("Mistral Nemo requires a user message after the system message")
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("<s>")
+	for i, message := range messages {
+		expectedRole := "user"
+		if i%2 == 1 {
+			expectedRole = "assistant"
+		}
+		if message.Role != expectedRole {
+			return "", fmt.Errorf("Mistral Nemo messages must alternate user and assistant; message %d has role %q", i, message.Role)
+		}
+		if message.Role == "user" {
+			prompt.WriteString("[INST]")
+			if systemMessage != "" && i == len(messages)-1 {
+				prompt.WriteString(systemMessage)
+				prompt.WriteString("\n\n")
+			}
+			prompt.WriteString(message.Content)
+			prompt.WriteString("[/INST]")
+		} else {
+			prompt.WriteString(message.Content)
+			prompt.WriteString("</s>")
+		}
+	}
 	return prompt.String(), nil
 }
 

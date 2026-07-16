@@ -1,5 +1,5 @@
 schema_version: 1
-catalog_version: "2026.07.5-draft"
+catalog_version: "2026.07.6-draft"
 
 # Entries remain planned until an exact GGUF artifact, immutable revision,
 # checksum, runner compatibility, and memory profile have been qualified.
@@ -290,7 +290,20 @@ families:
         level: balanced
         parameter_count: 12B
         capabilities: [general_chat, multilingual, code_chat]
-        status: planned
+        status: available
+        recommended_ram_bytes: 12884901888
+        expected_storage_bytes: 7477208192
+        artifact:
+          format: gguf
+          quantization: Q4_K_M
+          repository: bartowski/Mistral-Nemo-Instruct-2407-GGUF
+          revision: a2dd64a0a76ea1bdb2bb6ab6fa5496b003c7c908
+          url: https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF/resolve/a2dd64a0a76ea1bdb2bb6ab6fa5496b003c7c908/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
+          filename: Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
+          size_bytes: 7477208192
+          sha256: 7c1a10d202d8788dbe5628dc962254d10654c853cae6aaeca0618f05490d4a46
+          minimum_runner_version: "26.07.14.00"
+          prompt_template: mistral-nemo-instruct
       - id: mistral-small-3.1-24b-instruct
         name: Mistral Small 3.1 24B Instruct
         model_type: llm

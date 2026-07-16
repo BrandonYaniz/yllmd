@@ -194,7 +194,7 @@ func validateArtifact(artifact Artifact) error {
 
 func supportedPromptTemplate(template string) bool {
 	switch template {
-	case "qwen2.5-chatml", "phi4-chat", "gemma3-chat", "llama3-instruct", "granite3-chat":
+	case "qwen2.5-chatml", "phi4-chat", "gemma3-chat", "llama3-instruct", "granite3-chat", "mistral-nemo-instruct":
 		return true
 	default:
 		return false
