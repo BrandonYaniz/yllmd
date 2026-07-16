@@ -208,6 +208,8 @@ func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error)
 		return gemma3ChatPrompt(input.Messages)
 	case "llama3-instruct":
 		return llama3InstructPrompt(input.Messages), nil
+	case "granite3-chat":
+		return granite3ChatPrompt(input.Messages, time.Now())
 	default:
 		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
 	}
@@ -318,6 +320,36 @@ func llama3InstructPrompt(messages []protocol.Message) string {
 	}
 	prompt.WriteString("<|start_header_id|>assistant<|end_header_id|>\n\n")
 	return prompt.String()
+}
+
+func granite3ChatPrompt(messages []protocol.Message, now time.Time) (string, error) {
+	if len(messages) == 0 {
+		return "", errors.New("Granite 3 requires at least one message")
+	}
+	systemMessage := ""
+	loopMessages := messages
+	if messages[0].Role == "system" {
+		systemMessage = messages[0].Content
+		loopMessages = messages[1:]
+	} else {
+		systemMessage = " Knowledge Cutoff Date: April 2024.\n Today's Date: " +
+			now.Format("January 02, 2006") +
+			". You are Granite, developed by IBM. You are a helpful AI assistant."
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("<|start_of_role|>system<|end_of_role|>")
+	prompt.WriteString(systemMessage)
+	prompt.WriteString("<|end_of_text|>\n")
+	for _, message := range loopMessages {
+		prompt.WriteString("<|start_of_role|>")
+		prompt.WriteString(message.Role)
+		prompt.WriteString("<|end_of_role|>")
+		prompt.WriteString(message.Content)
+		prompt.WriteString("<|end_of_text|>\n")
+	}
+	prompt.WriteString("<|start_of_role|>assistant<|end_of_role|>")
+	return prompt.String(), nil
 }
 
 type runnerStopFilter struct {

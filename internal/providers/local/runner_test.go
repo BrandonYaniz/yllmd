@@ -181,6 +181,37 @@ func TestRunnerPromptAppliesLlama3InstructTemplate(t *testing.T) {
 	}
 }
 
+func TestRunnerPromptAppliesGranite3ChatTemplate(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "granite3.3-2b-instruct"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "Hello."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|start_of_role|>system<|end_of_role|>Be concise.<|end_of_text|>\n" +
+		"<|start_of_role|>user<|end_of_role|>Hello.<|end_of_text|>\n" +
+		"<|start_of_role|>assistant<|end_of_role|>"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+func TestGranite3ChatPromptAddsDefaultSystemMessage(t *testing.T) {
+	prompt, err := granite3ChatPrompt([]protocol.Message{{Role: "user", Content: "Hello."}}, time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|start_of_role|>system<|end_of_role|> Knowledge Cutoff Date: April 2024.\n" +
+		" Today's Date: July 15, 2026. You are Granite, developed by IBM. You are a helpful AI assistant.<|end_of_text|>\n" +
+		"<|start_of_role|>user<|end_of_role|>Hello.<|end_of_text|>\n" +
+		"<|start_of_role|>assistant<|end_of_role|>"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
 func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runner.log")
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)

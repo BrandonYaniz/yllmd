@@ -28,9 +28,10 @@ func TestEmbeddedCatalogIsValid(t *testing.T) {
 		checksum string
 		template string
 	}{
-		"phi4-mini-instruct":  {2491874688, "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2", "phi4-chat"},
-		"gemma3-1b-it":        {806058240, "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", "gemma3-chat"},
-		"llama32-1b-instruct": {807694464, "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83", "llama3-instruct"},
+		"phi4-mini-instruct":     {2491874688, "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2", "phi4-chat"},
+		"gemma3-1b-it":           {806058240, "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", "gemma3-chat"},
+		"llama32-1b-instruct":    {807694464, "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83", "llama3-instruct"},
+		"granite3.3-2b-instruct": {1545303328, "ac71e9e32c0bea919b409c5918f69ca74339854b0319c5065e4e9fb6d95c4852", "granite3-chat"},
 	} {
 		_, variant, ok := catalog.Variant(id)
 		if !ok || variant.Status != "available" || variant.Artifact == nil {
