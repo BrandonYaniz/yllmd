@@ -240,6 +240,37 @@ func TestRunnerPromptRejectsInvalidMistralNemoRoleOrder(t *testing.T) {
 	}
 }
 
+func TestRunnerPromptAppliesQwen3NonThinkingTemplate(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen3-1.7b"}}
+	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "First question."},
+		{Role: "assistant", Content: "First answer."},
+		{Role: "user", Content: "Second question."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "<|im_start|>system\nBe concise.<|im_end|>\n" +
+		"<|im_start|>user\nFirst question.<|im_end|>\n" +
+		"<|im_start|>assistant\nFirst answer.<|im_end|>\n" +
+		"<|im_start|>user\nSecond question.<|im_end|>\n" +
+		"<|im_start|>assistant\n<think>\n\n</think>\n\n"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+func TestRunnerPromptRejectsInvalidQwen3RoleOrder(t *testing.T) {
+	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen3-1.7b"}}
+	_, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
+		{Role: "assistant", Content: "Wrong first role."},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "must alternate") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runner.log")
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)

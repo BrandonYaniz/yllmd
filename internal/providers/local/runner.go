@@ -212,6 +212,8 @@ func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error)
 		return granite3ChatPrompt(input.Messages, time.Now())
 	case "mistral-nemo-instruct":
 		return mistralNemoInstructPrompt(input.Messages)
+	case "qwen3-nonthinking-chatml":
+		return qwen3NonThinkingPrompt(input.Messages)
 	default:
 		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
 	}
@@ -390,6 +392,41 @@ func mistralNemoInstructPrompt(messages []protocol.Message) (string, error) {
 			prompt.WriteString("</s>")
 		}
 	}
+	return prompt.String(), nil
+}
+
+func qwen3NonThinkingPrompt(messages []protocol.Message) (string, error) {
+	if len(messages) == 0 {
+		return "", errors.New("Qwen 3 requires at least one message")
+	}
+
+	var prompt strings.Builder
+	start := 0
+	if messages[0].Role == "system" {
+		prompt.WriteString("<|im_start|>system\n")
+		prompt.WriteString(messages[0].Content)
+		prompt.WriteString("<|im_end|>\n")
+		start = 1
+	}
+	if start == len(messages) {
+		return "", errors.New("Qwen 3 requires a user message after the system message")
+	}
+	for i := start; i < len(messages); i++ {
+		message := messages[i]
+		expectedRole := "user"
+		if (i-start)%2 == 1 {
+			expectedRole = "assistant"
+		}
+		if message.Role != expectedRole {
+			return "", fmt.Errorf("Qwen 3 messages must alternate user and assistant; message %d has role %q", i-start, message.Role)
+		}
+		prompt.WriteString("<|im_start|>")
+		prompt.WriteString(message.Role)
+		prompt.WriteByte('\n')
+		prompt.WriteString(message.Content)
+		prompt.WriteString("<|im_end|>\n")
+	}
+	prompt.WriteString("<|im_start|>assistant\n<think>\n\n</think>\n\n")
 	return prompt.String(), nil
 }
 

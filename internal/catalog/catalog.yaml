@@ -1,5 +1,5 @@
 schema_version: 1
-catalog_version: "2026.07.6-draft"
+catalog_version: "2026.07.7-draft"
 
 # Entries remain planned until an exact GGUF artifact, immutable revision,
 # checksum, runner compatibility, and memory profile have been qualified.
@@ -172,7 +172,20 @@ families:
         level: fast
         parameter_count: 1.7B
         capabilities: [general_chat, multilingual, reasoning]
-        status: planned
+        status: available
+        recommended_ram_bytes: 4294967296
+        expected_storage_bytes: 1834426016
+        artifact:
+          format: gguf
+          quantization: Q8_0
+          repository: Qwen/Qwen3-1.7B-GGUF
+          revision: 90862c4b9d2787eaed51d12237eafdfe7c5f6077
+          url: https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf
+          filename: Qwen3-1.7B-Q8_0.gguf
+          size_bytes: 1834426016
+          sha256: 061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a
+          minimum_runner_version: "26.07.14.00"
+          prompt_template: qwen3-nonthinking-chatml
       - id: qwen3-4b
         name: Qwen 3 4B
         model_type: llm
