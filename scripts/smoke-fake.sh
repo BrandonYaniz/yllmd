@@ -106,6 +106,8 @@ go run ./cmd/yllmctl -socket "$SOCKET_PATH" models install fast -file "$MODEL_PA
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models activate fast -version smoke-v1 | grep '"type": "activated"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models versions fast | grep '"version": "smoke-v1"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models list | grep '"active_version": "smoke-v1"' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" models updates | grep 'No curated catalog models are installed' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" models update -all | grep 'All installed curated models are up to date' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" generate -stream=false -prompt "release smoke" | grep 'fake local response: release smoke' >/dev/null
 
 echo "smoke ok"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/BrandonYaniz/yllmd/internal/catalog"
 	"github.com/BrandonYaniz/yllmd/internal/machine"
+	"github.com/BrandonYaniz/yllmd/internal/protocol"
 )
 
 func TestCatalogInstallSelectionDirectVariant(t *testing.T) {
@@ -117,5 +118,45 @@ func TestGuidedModelSelectionAcceptsRequiredLicense(t *testing.T) {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("output missing %q:\n%s", expected, output.String())
 		}
+	}
+}
+
+func TestCatalogUpdateStatuses(t *testing.T) {
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, current, _ := modelCatalog.Variant("qwen25-coder-1.5b-instruct")
+	installed := []protocol.InstalledModel{
+		{Name: "local-only", ActiveVersion: "v1", Versions: []protocol.ModelVersion{{Version: "v1"}}},
+		{Name: "qwen25-coder-3b-instruct", Configured: true, ActiveVersion: "old", Versions: []protocol.ModelVersion{{Version: "old"}}},
+		{Name: "qwen25-coder-1.5b-instruct", Configured: true, ActiveVersion: "old", Versions: []protocol.ModelVersion{{Version: "old"}, {Version: current.Artifact.Revision}}},
+	}
+	rows := catalogUpdateStatuses(modelCatalog, installed)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v", rows)
+	}
+	if rows[0].Model != "qwen25-coder-1.5b-instruct" || rows[0].UpdateAvailable || !rows[0].CatalogInstalled {
+		t.Fatalf("current row = %#v", rows[0])
+	}
+	if rows[1].Model != "qwen25-coder-3b-instruct" || !rows[1].UpdateAvailable || rows[1].CatalogInstalled {
+		t.Fatalf("outdated row = %#v", rows[1])
+	}
+}
+
+func TestPendingCatalogUpdatePlansActivateOnlyConfiguredModels(t *testing.T) {
+	rows := []catalogUpdateStatus{
+		{Model: "outdated", UpdateAvailable: true},
+		{Model: "downloaded", Configured: true, ActiveVersion: "old", CatalogVersion: "new", CatalogInstalled: true},
+		{Model: "unconfigured", ActiveVersion: "old", CatalogVersion: "new", CatalogInstalled: true},
+		{Model: "current", Configured: true, ActiveVersion: "new", CatalogVersion: "new", CatalogInstalled: true},
+	}
+	plans := pendingCatalogUpdatePlans(rows, false)
+	if len(plans) != 1 || plans[0].variant != "outdated" || plans[0].activate {
+		t.Fatalf("plans = %#v", plans)
+	}
+	plans = pendingCatalogUpdatePlans(rows, true)
+	if len(plans) != 2 || plans[0] != (catalogActionPlan{variant: "outdated", activate: false}) || plans[1] != (catalogActionPlan{variant: "downloaded", activate: true}) {
+		t.Fatalf("activated plans = %#v", plans)
 	}
 }

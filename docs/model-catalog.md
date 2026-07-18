@@ -125,6 +125,16 @@ configuration.
 
 ## Update a curated model
 
+Check every installed curated model against the embedded catalog:
+
+```text
+yllmctl models updates
+```
+
+The report distinguishes a newer revision that must be downloaded from a
+catalog revision that is already downloaded but not active. Add `--json` for a
+machine-readable report.
+
 Update an installed variant to the catalog's latest qualified revision:
 
 ```text
@@ -136,6 +146,16 @@ is already installed. If the catalog points to a newer revision, the daemon
 downloads and verifies it as a new installed version. Pass `-activate` to make
 the qualified revision current; activation still requires a configured model
 and an idle daemon, and preserves the previous version for rollback.
+
+Update every installed curated model for which the catalog has a newer
+revision:
+
+```text
+yllmctl models update -all
+```
+
+Add `-activate` to activate downloaded catalog revisions for configured models.
+Unconfigured models are updated but are not activated.
 
 For a family requiring explicit terms, pass `-accept-license` once after
 reviewing the license shown by `models variants`. The daemon persists the family,

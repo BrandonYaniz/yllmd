@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -241,6 +242,10 @@ func runModels(socketPath, modelDir string, args []string) {
 		runModelsUpdate(socketPath, args[1:])
 		return
 	}
+	if len(args) >= 1 && args[0] == "updates" {
+		runModelsUpdates(socketPath, args[1:])
+		return
+	}
 	if len(args) >= 1 && args[0] == "activate" {
 		runModelsActivate(socketPath, args[1:])
 		return
@@ -262,15 +267,7 @@ func runModels(socketPath, modelDir string, args []string) {
 }
 
 func runModelsInstalled(socketPath string) {
-	client, err := ipc.Dial(socketPath, 2*time.Second)
-	if err != nil {
-		fatal(err)
-	}
-	defer client.Close()
-	if err := client.Send(protocol.Request{Type: protocol.MessageModels, ID: requestID(protocol.MessageModels), Action: "installed"}); err != nil {
-		fatal(err)
-	}
-	event, err := client.ReadEvent()
+	event, err := readInstalledInventory(socketPath)
 	if err != nil {
 		fatal(err)
 	}
@@ -293,6 +290,18 @@ func runModelsInstalled(socketPath string) {
 		fmt.Printf("%-34s %-12s %-10d %-10s %t\n",
 			model.Name, active, len(model.Versions), compatibility.FormatBytes(model.InstalledBytes), model.Configured)
 	}
+}
+
+func readInstalledInventory(socketPath string) (protocol.Event, error) {
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		return protocol.Event{}, err
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{Type: protocol.MessageModels, ID: requestID(protocol.MessageModels), Action: "installed"}); err != nil {
+		return protocol.Event{}, err
+	}
+	return client.ReadEvent()
 }
 
 func runModelsLicenses(socketPath string) {
@@ -743,6 +752,21 @@ func runModelsUpdate(socketPath string, args []string) {
 		usage()
 		os.Exit(2)
 	}
+	if args[0] == "-all" || args[0] == "--all" {
+		updateFlags := flag.NewFlagSet("models update -all", flag.ExitOnError)
+		updateFlags.Bool("all", false, "update every installed curated variant with a newer catalog revision")
+		activate := updateFlags.Bool("activate", false, "activate qualified revisions for configured models")
+		acceptLicense := updateFlags.Bool("accept-license", false, "explicitly accept required model-family license terms")
+		if err := updateFlags.Parse(args); err != nil {
+			fatal(err)
+		}
+		if len(updateFlags.Args()) != 0 {
+			usage()
+			os.Exit(2)
+		}
+		runModelsUpdateAll(socketPath, *acceptLicense, *activate)
+		return
+	}
 	variantID := args[0]
 	updateFlags := flag.NewFlagSet("models update", flag.ExitOnError)
 	activate := updateFlags.Bool("activate", false, "activate the qualified catalog revision")
@@ -764,17 +788,149 @@ func runModelsUpdate(socketPath string, args []string) {
 	runCatalogActions(socketPath, "update", []string{variantID}, *acceptLicense, *activate)
 }
 
+type catalogUpdateStatus struct {
+	Model            string `json:"model"`
+	ActiveVersion    string `json:"active_version,omitempty"`
+	CatalogVersion   string `json:"catalog_version"`
+	Configured       bool   `json:"configured"`
+	UpdateAvailable  bool   `json:"update_available"`
+	CatalogInstalled bool   `json:"catalog_installed"`
+}
+
+func runModelsUpdates(socketPath string, args []string) {
+	flags := flag.NewFlagSet("models updates", flag.ExitOnError)
+	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		fatal(err)
+	}
+	if len(flags.Args()) != 0 {
+		usage()
+		os.Exit(2)
+	}
+	rows, err := installedCatalogUpdates(socketPath)
+	if err != nil {
+		fatal(err)
+	}
+	if *jsonOutput {
+		printJSON(rows)
+		return
+	}
+	if len(rows) == 0 {
+		fmt.Println("No curated catalog models are installed.")
+		return
+	}
+	fmt.Printf("%-34s %-12s %-12s %-16s\n", "MODEL", "ACTIVE", "CATALOG", "STATUS")
+	for _, row := range rows {
+		status := "up to date"
+		if row.UpdateAvailable {
+			status = "update available"
+		} else if row.ActiveVersion != row.CatalogVersion {
+			status = "downloaded"
+		}
+		fmt.Printf("%-34s %-12s %-12s %-16s\n", row.Model, shortVersion(row.ActiveVersion), shortVersion(row.CatalogVersion), status)
+	}
+}
+
+func runModelsUpdateAll(socketPath string, acceptLicense, activate bool) {
+	rows, err := installedCatalogUpdates(socketPath)
+	if err != nil {
+		fatal(err)
+	}
+	plans := pendingCatalogUpdatePlans(rows, activate)
+	if len(plans) == 0 {
+		fmt.Println("All installed curated models are up to date.")
+		return
+	}
+	runCatalogActionPlans(socketPath, "update", plans, acceptLicense)
+}
+
+func installedCatalogUpdates(socketPath string) ([]catalogUpdateStatus, error) {
+	event, err := readInstalledInventory(socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if event.Type == "error" {
+		return nil, fmt.Errorf("%s: %s", event.Code, event.Message)
+	}
+	if event.Type != "installed_models" {
+		return nil, fmt.Errorf("unexpected installed-model inventory response %q", event.Type)
+	}
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		return nil, err
+	}
+	return catalogUpdateStatuses(modelCatalog, event.InstalledModels), nil
+}
+
+func catalogUpdateStatuses(modelCatalog catalog.Catalog, installed []protocol.InstalledModel) []catalogUpdateStatus {
+	rows := make([]catalogUpdateStatus, 0, len(installed))
+	for _, model := range installed {
+		_, variant, ok := modelCatalog.Variant(model.Name)
+		if !ok || variant.Status != "available" || variant.Artifact == nil {
+			continue
+		}
+		catalogInstalled := false
+		for _, version := range model.Versions {
+			if version.Version == variant.Artifact.Revision {
+				catalogInstalled = true
+				break
+			}
+		}
+		rows = append(rows, catalogUpdateStatus{
+			Model: model.Name, ActiveVersion: model.ActiveVersion,
+			CatalogVersion: variant.Artifact.Revision, Configured: model.Configured,
+			UpdateAvailable: !catalogInstalled, CatalogInstalled: catalogInstalled,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Model < rows[j].Model })
+	return rows
+}
+
+type catalogActionPlan struct {
+	variant  string
+	activate bool
+}
+
+func pendingCatalogUpdatePlans(rows []catalogUpdateStatus, activate bool) []catalogActionPlan {
+	plans := make([]catalogActionPlan, 0, len(rows))
+	for _, row := range rows {
+		if row.UpdateAvailable || (activate && row.Configured && row.ActiveVersion != row.CatalogVersion) {
+			plans = append(plans, catalogActionPlan{variant: row.Model, activate: activate && row.Configured})
+		}
+	}
+	return plans
+}
+
+func shortVersion(version string) string {
+	if version == "" {
+		return "-"
+	}
+	if len(version) > 12 {
+		return version[:12]
+	}
+	return version
+}
+
 func runCatalogActions(socketPath, action string, variants []string, acceptLicense, activate bool) {
+	plans := make([]catalogActionPlan, 0, len(variants))
+	for _, variant := range variants {
+		plans = append(plans, catalogActionPlan{variant: variant, activate: activate})
+	}
+	runCatalogActionPlans(socketPath, action, plans, acceptLicense)
+}
+
+func runCatalogActionPlans(socketPath, action string, plans []catalogActionPlan, acceptLicense bool) {
 	client, err := ipc.Dial(socketPath, 2*time.Second)
 	if err != nil {
 		fatal(err)
 	}
 	defer client.Close()
-	for _, variant := range variants {
+	for _, plan := range plans {
+		variant := plan.variant
 		id := requestID(protocol.MessageModels)
 		if err := client.Send(protocol.Request{
 			Type: protocol.MessageModels, ID: id, Action: action, Model: variant,
-			Activate: &activate, LicenseAccepted: acceptLicense,
+			Activate: &plan.activate, LicenseAccepted: acceptLicense,
 		}); err != nil {
 			fatal(err)
 		}
@@ -1087,7 +1243,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models choose|models licenses|models installed|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models choose|models licenses|models installed|models updates|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models update -all [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {

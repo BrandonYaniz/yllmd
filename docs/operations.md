@@ -43,6 +43,10 @@ Use `yllmctl models update <catalog-variant>` to install the embedded catalog's
 latest qualified revision for a model that is already installed. Add
 `-activate` to switch to it immediately while the daemon is idle.
 
+Use `yllmctl models updates` to compare all installed curated models with the
+embedded catalog. `yllmctl models update -all` downloads every available newer
+revision; add `-activate` to switch configured models to those revisions.
+
 Use `yllmctl models delete <model> --version <id>` to remove an inactive version,
 or omit `--version` to remove an entire unconfigured installation. Active
 versions and rollback targets are protected. Removing a configured model
