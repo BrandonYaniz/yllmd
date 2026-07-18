@@ -43,15 +43,15 @@ an artifact implementation detail; the normal workflow will install the
 catalog's approved quantization rather than asking users to choose among GGUF
 quantization names.
 
-The initial qualified downloads are Qwen2.5-Coder 1.5B Instruct, Qwen 3 1.7B,
-Phi-4 Mini Instruct, Gemma 3 1B Instruct, Llama 3.2 1B Instruct, IBM Granite
-3.3 2B Instruct, and Mistral Nemo 12B Instruct. Qwen and Granite are sourced
-from their publishers' official GGUF repositories, Phi, Llama, and Mistral from
-Bartowski quantizations of the publishers' checkpoints, and Gemma from the
-llama.cpp organization's GGUF repository. Curated downloads pin an immutable
-upstream revision and verify the exact byte count and SHA-256 digest before
-installation. The official Qwen 3 1.7B artifact is Q8_0; quantization remains a
-curated implementation detail rather than another user-facing choice.
+The qualified downloads include Qwen2.5-Coder 1.5B, 3B, and 7B Instruct;
+Qwen 3 1.7B; Phi-4 Mini Instruct; Gemma 3 1B Instruct; Llama 3.2 1B Instruct;
+IBM Granite 3.3 2B Instruct; and Mistral Nemo 12B Instruct. Qwen and Granite are
+sourced from their publishers' official GGUF repositories, Phi, Llama, and
+Mistral from Bartowski quantizations of the publishers' checkpoints, and Gemma
+from the llama.cpp organization's GGUF repository. Curated downloads pin an
+immutable upstream revision and verify the exact byte count and SHA-256 digest
+before installation. The official Qwen 3 1.7B artifact is Q8_0; quantization
+remains a curated implementation detail rather than another user-facing choice.
 
 The embedded catalog is currently a draft qualification list. Entries marked
 `planned` are not installable. An entry becomes `available` only after an exact

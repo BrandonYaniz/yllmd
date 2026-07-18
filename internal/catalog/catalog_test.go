@@ -34,6 +34,8 @@ func TestEmbeddedCatalogIsValid(t *testing.T) {
 		"granite3.3-2b-instruct":    {1545303328, "ac71e9e32c0bea919b409c5918f69ca74339854b0319c5065e4e9fb6d95c4852", "granite3-chat"},
 		"mistral-nemo-12b-instruct": {7477208192, "7c1a10d202d8788dbe5628dc962254d10654c853cae6aaeca0618f05490d4a46", "mistral-nemo-instruct"},
 		"qwen3-1.7b":                {1834426016, "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a", "qwen3-nonthinking-chatml"},
+		"qwen25-coder-3b-instruct":  {2104932800, "724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7", "qwen2.5-chatml"},
+		"qwen25-coder-7b-instruct":  {4683073536, "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c", "qwen2.5-chatml"},
 	} {
 		_, variant, ok := catalog.Variant(id)
 		if !ok || variant.Status != "available" || variant.Artifact == nil {

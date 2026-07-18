@@ -49,8 +49,29 @@ func TestCatalogInstallSelectionAllIncludesOnlyQualifiedVariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(selected) != 1 || selected[0] != "qwen25-coder-1.5b-instruct" {
+	if strings.Join(selected, ",") != "qwen25-coder-1.5b-instruct,qwen25-coder-3b-instruct,qwen25-coder-7b-instruct" {
 		t.Fatalf("selected = %#v", selected)
+	}
+}
+
+func TestGuidedModelSelectionOffersMultipleCoderVariants(t *testing.T) {
+	modelCatalog, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	selected, accepted, err := guidedModelSelection(strings.NewReader("qwen-coder\nall\n"), &output, modelCatalog, machine.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "qwen25-coder-1.5b-instruct,qwen25-coder-3b-instruct,qwen25-coder-7b-instruct"
+	if strings.Join(selected, ",") != want || accepted {
+		t.Fatalf("selected = %#v, accepted = %t", selected, accepted)
+	}
+	for _, expected := range []string{"qwen25-coder-1.5b-instruct", "qwen25-coder-3b-instruct", "qwen25-coder-7b-instruct", "(3 available)"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("output missing %q:\n%s", expected, output.String())
+		}
 	}
 }
 
