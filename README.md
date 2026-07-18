@@ -33,7 +33,7 @@ client applications
   -> local runner
 ```
 
-Local inference is handled by an external runner process, such as `yllama-runner`, over binary stdio frames.
+Local inference is handled by `yllama-runner` `26.07.16.01-Release` or newer over protocol-2 binary stdio frames. Models remain resident across sequential requests, while sampling settings, stop sequences, usage counters, cancellation, and graceful shutdown are carried by the framed protocol.
 
 ## Status
 

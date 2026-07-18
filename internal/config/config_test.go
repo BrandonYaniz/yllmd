@@ -74,6 +74,18 @@ func TestRejectsUnsupportedModelType(t *testing.T) {
 	}
 }
 
+func TestRejectsInvalidGPULayers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := readExampleConfig(t)
+	data = []byte(strings.Replace(string(data), "gpu_layers: 0", "gpu_layers: -2", 1))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected invalid gpu_layers to be rejected")
+	}
+}
+
 func readExampleConfig(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))

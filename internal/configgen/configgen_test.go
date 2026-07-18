@@ -22,7 +22,7 @@ func TestGenerateProducesLoadableConfig(t *testing.T) {
 			{ID: "general-fast", ModelType: "llm", Level: "fast"},
 			{ID: "code-balanced", ModelType: "code", Level: "balanced"},
 		},
-		ResidentID: "general-fast", Threads: 8,
+		ResidentID: "general-fast", Threads: 8, GPULayers: -1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +40,20 @@ func TestGenerateProducesLoadableConfig(t *testing.T) {
 	}
 	if loaded.Paths.ModelDir != "/home/alice/yllmd/models" {
 		t.Fatalf("model dir = %q", loaded.Paths.ModelDir)
+	}
+	if loaded.LocalModels["general-fast"].Runtime.GPULayers != -1 {
+		t.Fatalf("gpu layers = %d", loaded.LocalModels["general-fast"].Runtime.GPULayers)
+	}
+}
+
+func TestGenerateRejectsInvalidGPULayers(t *testing.T) {
+	_, err := Generate(Options{
+		Mode: locations.ModeUser, Paths: locations.Paths{ModelDir: "/models"},
+		Variants: []catalog.Variant{{ID: "one", ModelType: "llm", Level: "fast"}},
+		Threads:  4, GPULayers: -2,
+	})
+	if err == nil {
+		t.Fatal("expected gpu layer validation error")
 	}
 }
 

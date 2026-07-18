@@ -34,7 +34,7 @@ Excluded:
 
 - Go 1.22 or newer.
 - A Unix-like system with Unix domain sockets.
-- `yllama-runner` installed for real local inference.
+- `yllama-runner` `26.07.16.01-Release` or newer, with protocol 2 support, installed for real local inference.
 
 ## Checks
 

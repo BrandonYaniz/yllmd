@@ -82,12 +82,18 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 	if completed.Text != "fake runner response" {
 		t.Fatalf("completed text = %q", completed.Text)
 	}
+	if completed.FinishReason != "eos" {
+		t.Fatalf("finish reason = %q", completed.FinishReason)
+	}
+	if completed.Usage == nil || completed.Usage.InputTokens != 3 || completed.Usage.OutputTokens != 2 || completed.Usage.TotalTokens != 5 {
+		t.Fatalf("usage = %#v", completed.Usage)
+	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read runner log: %v", err)
 	}
 	log := string(data)
-	for _, want := range []string{"--model", "--ctx=1024", "--threads=2", "--max-tokens=128", "--temperature=0.8", "--top-p=0.95", "prompt hello"} {
+	for _, want := range []string{"--protocol=2", "--model", "--ctx=1024", "--threads=2", "--gpu-layers=0", "generate mode=0", "max_tokens=128", "temperature=0.8", "top_p=0.95", "prompt hello"} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("runner log missing %q:\n%s", want, log)
 		}
@@ -321,7 +327,7 @@ func TestRunnerProviderCooldownReloadsResidentModel(t *testing.T) {
 	waitForLog(t, logPath, "start model.gguf")
 }
 
-func TestRunnerProviderRestartsForDifferentGenerationSettings(t *testing.T) {
+func TestRunnerProviderReusesModelForDifferentGenerationSettings(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runner.log")
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
 	runnerPath := writeFakeRunner(t)
@@ -338,11 +344,96 @@ func TestRunnerProviderRestartsForDifferentGenerationSettings(t *testing.T) {
 		t.Fatalf("read runner log: %v", err)
 	}
 	log := string(data)
-	if count := strings.Count(log, "start "); count != 2 {
+	if count := strings.Count(log, "start "); count != 1 {
 		t.Fatalf("start count = %d, log:\n%s", count, log)
 	}
-	if !strings.Contains(log, "--max-tokens=64") {
-		t.Fatalf("runner did not restart with requested max tokens:\n%s", log)
+	if !strings.Contains(log, "max_tokens=64") {
+		t.Fatalf("runner did not receive requested max tokens:\n%s", log)
+	}
+}
+
+func TestRunnerProviderPassesAllGenerationSettings(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
+	runnerPath := writeFakeRunner(t)
+	provider := NewRunnerProvider(runnerTestConfig(t, runnerPath), nil)
+	defer closeProvider(t, provider)
+
+	temperature, topP, minP := 0.2, 0.8, 0.1
+	presence, repeat := -0.25, 1.15
+	maxTokens, topK := 77, 12
+	seed := uint64(99)
+	drainGenerateWithSettings(t, provider, "req-settings", "settings", protocol.GenerationSettings{
+		Temperature: &temperature, TopP: &topP, MaxTokens: &maxTokens,
+		TopK: &topK, MinP: &minP, PresencePenalty: &presence,
+		RepeatPenalty: &repeat, Seed: &seed, Stop: []string{"one", "two"},
+	})
+
+	log := string(mustReadFile(t, logPath))
+	for _, want := range []string{"max_tokens=77", "temperature=0.2", "top_p=0.8", "top_k=12", "min_p=0.1", "presence_penalty=-0.25", "repeat_penalty=1.15", "seed=99", "stops=one|two"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("runner log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestRunnerProviderUsesFormattedTokenizationForCatalogTemplate(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
+	runnerPath := writeFakeRunner(t)
+	cfg := runnerTestConfig(t, runnerPath)
+	model := cfg.LocalModels["fast"]
+	model.CatalogID = "qwen25-coder-1.5b-instruct"
+	cfg.LocalModels["fast"] = model
+	provider := NewRunnerProvider(cfg, nil)
+	defer closeProvider(t, provider)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	events, err := provider.Generate(ctx, providers.GenerateRequest{
+		ID: "req-chat", Model: "fast", Input: protocol.Input{Kind: "messages", Messages: []protocol.Message{{Role: "user", Content: "hello"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	log := string(mustReadFile(t, logPath))
+	if !strings.Contains(log, "generate mode=1") {
+		t.Fatalf("formatted tokenization mode not used:\n%s", log)
+	}
+}
+
+func TestRunnerProviderCancellationKeepsSessionReusable(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
+	runnerPath := writeFakeRunner(t)
+	provider := NewRunnerProvider(runnerTestConfig(t, runnerPath), nil)
+	defer closeProvider(t, provider)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := provider.Generate(ctx, providers.GenerateRequest{
+		ID: "req-cancel", Model: "fast", Stream: true,
+		Input: protocol.Input{Kind: "prompt", Prompt: "cancel test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+	waitForLog(t, logPath, "prompt cancel test")
+	cancel()
+	<-done
+	waitForLog(t, logPath, "cancel")
+
+	drainGenerate(t, provider, "req-after-cancel", "still resident")
+	log := string(mustReadFile(t, logPath))
+	if count := strings.Count(log, "start "); count != 1 {
+		t.Fatalf("start count = %d, log:\n%s", count, log)
 	}
 }
 
@@ -386,6 +477,9 @@ func TestRunnerProviderAppliesStopSequences(t *testing.T) {
 	if streamed.String() != "before " {
 		t.Fatalf("streamed text = %q", streamed.String())
 	}
+	if completed.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q", completed.FinishReason)
+	}
 }
 
 func writeFakeRunner(t *testing.T) string {
@@ -396,11 +490,14 @@ func writeFakeRunner(t *testing.T) string {
 	program := `package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -432,42 +529,157 @@ func main() {
 	if response == "" {
 		response = "fake runner response"
 	}
-	logEvent("start %s --model %s --ctx=%s --threads=%s --max-tokens=%s --temperature=%s --top-p=%s",
+	logEvent("start %s --protocol=%s --model %s --ctx=%s --threads=%s --gpu-layers=%s",
 		filepath.Base(flagValue(args, "--model")),
+		flagValue(args, "--protocol"),
 		flagValue(args, "--model"),
 		flagValue(args, "--ctx"),
 		flagValue(args, "--threads"),
-		flagValue(args, "--max-tokens"),
-		flagValue(args, "--temperature"),
-		flagValue(args, "--top-p"))
+		flagValue(args, "--gpu-layers"))
+	contextSize, _ := strconv.Atoi(flagValue(args, "--ctx"))
+	writeReady(uint32(contextSize))
 
 	for {
-		var lengthBytes [4]byte
-		if _, err := io.ReadFull(os.Stdin, lengthBytes[:]); err != nil {
+		kind, payload, err := readFrame()
+		if err != nil {
 			if err != io.EOF && err != io.ErrUnexpectedEOF {
 				logEvent("read_error %v", err)
 			}
 			return
 		}
-		length := binary.LittleEndian.Uint32(lengthBytes[:])
-		prompt := make([]byte, length)
-		if _, err := io.ReadFull(os.Stdin, prompt); err != nil {
-			logEvent("read_error %v", err)
+		switch kind {
+		case 1:
+			request, err := decodeGenerate(payload)
+			if err != nil {
+				writeError("malformed_generate", err.Error())
+				continue
+			}
+			logEvent("generate mode=%d max_tokens=%d temperature=%g top_p=%g top_k=%d min_p=%g presence_penalty=%g repeat_penalty=%g seed=%d stops=%s prompt=%s",
+				request.mode, request.maxTokens, request.temperature, request.topP,
+				request.topK, request.minP, request.presence, request.repeat,
+				request.seed, strings.Join(request.stops, "|"), strings.TrimSpace(request.prompt))
+			logEvent("prompt %s", request.prompt)
+			if strings.Contains(request.prompt, "cancel test") {
+				writeChunk("partial")
+				cancelKind, _, err := readFrame()
+				if err != nil || cancelKind != 2 {
+					writeError("cancel_failed", "expected Cancel")
+					return
+				}
+				logEvent("cancel")
+				writeCompleted(3, 3, 1)
+				continue
+			}
+			output := response
+			reason := byte(0)
+			for _, stop := range request.stops {
+				if index := strings.Index(output, stop); index >= 0 {
+					output = output[:index]
+					reason = 2
+					break
+				}
+			}
+			if output != "" {
+				writeChunk(output)
+			}
+			writeCompleted(reason, 3, 2)
+		case 2:
+			writeError("no_active_request", "Cancel received with no active Generate")
+		case 3:
+			logEvent("shutdown")
 			return
 		}
-		logEvent("generate %s", strings.TrimSpace(string(prompt)))
-		logEvent("prompt %s", string(prompt))
-		writeChunk(response)
-		os.Stdout.Write([]byte{0x02})
 	}
 }
 
+type generateRequest struct {
+	mode byte
+	maxTokens uint32
+	temperature, topP, minP, presence, repeat float64
+	topK int32
+	seed uint64
+	stops []string
+	prompt string
+}
+
+func decodeGenerate(payload []byte) (generateRequest, error) {
+	var request generateRequest
+	if len(payload) < 64 {
+		return request, fmt.Errorf("short payload")
+	}
+	request.mode = payload[0]
+	stopCount := int(binary.LittleEndian.Uint16(payload[2:4]))
+	request.maxTokens = binary.LittleEndian.Uint32(payload[4:8])
+	request.temperature = math.Float64frombits(binary.LittleEndian.Uint64(payload[8:16]))
+	request.topP = math.Float64frombits(binary.LittleEndian.Uint64(payload[16:24]))
+	request.topK = int32(binary.LittleEndian.Uint32(payload[24:28]))
+	request.minP = math.Float64frombits(binary.LittleEndian.Uint64(payload[28:36]))
+	request.presence = math.Float64frombits(binary.LittleEndian.Uint64(payload[36:44]))
+	request.repeat = math.Float64frombits(binary.LittleEndian.Uint64(payload[44:52]))
+	request.seed = binary.LittleEndian.Uint64(payload[52:60])
+	offset := 60
+	for i := 0; i < stopCount; i++ {
+		if offset+4 > len(payload) { return request, fmt.Errorf("short stop length") }
+		length := int(binary.LittleEndian.Uint32(payload[offset:offset+4])); offset += 4
+		if offset+length > len(payload) { return request, fmt.Errorf("short stop") }
+		request.stops = append(request.stops, string(payload[offset:offset+length])); offset += length
+	}
+	if offset+4 > len(payload) { return request, fmt.Errorf("short prompt length") }
+	length := int(binary.LittleEndian.Uint32(payload[offset:offset+4])); offset += 4
+	if offset+length != len(payload) { return request, fmt.Errorf("bad prompt length") }
+	request.prompt = string(payload[offset:])
+	return request, nil
+}
+
+func readFrame() (byte, []byte, error) {
+	var header [5]byte
+	if _, err := io.ReadFull(os.Stdin, header[:]); err != nil { return 0, nil, err }
+	length := binary.LittleEndian.Uint32(header[1:])
+	payload := make([]byte, length)
+	_, err := io.ReadFull(os.Stdin, payload)
+	return header[0], payload, err
+}
+
+func writeFrame(kind byte, payload []byte) {
+	var header [5]byte
+	header[0] = kind
+	binary.LittleEndian.PutUint32(header[1:], uint32(len(payload)))
+	os.Stdout.Write(header[:]); os.Stdout.Write(payload)
+}
+
+func writeReady(contextSize uint32) {
+	version := "26.07.16.01-Release"
+	var payload bytes.Buffer
+	binary.Write(&payload, binary.LittleEndian, uint16(2))
+	binary.Write(&payload, binary.LittleEndian, uint16(len(version)))
+	payload.WriteString(version)
+	binary.Write(&payload, binary.LittleEndian, contextSize)
+	binary.Write(&payload, binary.LittleEndian, uint64(0x7f))
+	writeFrame(0x10, payload.Bytes())
+}
+
 func writeChunk(text string) {
-	var length [4]byte
-	binary.LittleEndian.PutUint32(length[:], uint32(len(text)))
-	os.Stdout.Write([]byte{0x01})
-	os.Stdout.Write(length[:])
-	os.Stdout.Write([]byte(text))
+	var payload bytes.Buffer
+	binary.Write(&payload, binary.LittleEndian, uint32(len(text)))
+	payload.WriteString(text)
+	writeFrame(1, payload.Bytes())
+}
+
+func writeCompleted(reason byte, inputTokens, outputTokens uint32) {
+	var payload bytes.Buffer
+	payload.WriteByte(reason)
+	binary.Write(&payload, binary.LittleEndian, inputTokens)
+	binary.Write(&payload, binary.LittleEndian, outputTokens)
+	binary.Write(&payload, binary.LittleEndian, uint64(10))
+	binary.Write(&payload, binary.LittleEndian, uint64(20))
+	writeFrame(4, payload.Bytes())
+}
+
+func writeError(code, message string) {
+	var payload bytes.Buffer
+	binary.Write(&payload, binary.LittleEndian, uint16(len(code))); payload.WriteString(code)
+	binary.Write(&payload, binary.LittleEndian, uint16(len(message))); payload.WriteString(message)
+	writeFrame(3, payload.Bytes())
 }
 `
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
@@ -570,4 +782,13 @@ func waitForLog(t *testing.T, path, want string) {
 	}
 	data, _ := os.ReadFile(path)
 	t.Fatalf("timed out waiting for %q in log:\n%s", want, string(data))
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

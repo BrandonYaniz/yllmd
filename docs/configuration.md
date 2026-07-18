@@ -84,13 +84,19 @@ local_models:
     model_type: llm
     tier: fast
     resident: true
+    runtime:
+      context_tokens: 8192
+      threads: 8
+      gpu_layers: 0
 ```
 
 `model_type` selects the workload family for the model. The current release accepts `llm` and `code`; future releases may add other families such as image, audio, or video. `tier` is the model level and should use `fast`, `balanced`, or `deep` for the standard local routing surface.
 
 If only one local model is configured, all local model requests may use that model depending on `unavailable_tier_policy`.
 
-`yllama-runner` is started with the configured `model_path`, `runtime.context_tokens`, and `runtime.threads` values. Generation settings such as `max_tokens`, `temperature`, and `top_p` are passed as runner startup flags for each effective resident session.
+`yllama-runner` is started once per loaded model with protocol 2 and the configured `model_path`, `runtime.context_tokens`, `runtime.threads`, and `runtime.gpu_layers` values. Use `gpu_layers: 0` for CPU-only execution, a positive value for a fixed number of GPU-offloaded layers, or `-1` to let the runner offload every supported layer.
+
+Generation settings are sent with each request, so changing `max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`, `seed`, or `stop` does not reload the model. `yllmd` requires `yllama-runner` version `26.07.16.01-Release` or newer and validates the runner's protocol, capabilities, and context size before accepting requests.
 
 ## Remote providers
 

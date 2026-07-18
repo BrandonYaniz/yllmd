@@ -3,6 +3,8 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"math"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,57 @@ func TestDecodeGenerateRequest(t *testing.T) {
 	}
 	if req.ModelType != "code" || req.Level != "balanced" {
 		t.Fatalf("unexpected routing fields: model_type=%q level=%q", req.ModelType, req.Level)
+	}
+}
+
+func TestValidateGenerateAcceptsRunnerSamplingSettings(t *testing.T) {
+	temperature, topP, minP := 0.2, 0.9, 0.05
+	presence, repeat := -0.5, 1.1
+	maxTokens, topK := 512, 40
+	seed := uint64(42)
+	req := Request{
+		Type:  MessageGenerate,
+		ID:    "req-settings",
+		Input: &Input{Kind: "prompt", Prompt: "hello"},
+		Settings: GenerationSettings{
+			Temperature: &temperature, TopP: &topP, MaxTokens: &maxTokens,
+			TopK: &topK, MinP: &minP, PresencePenalty: &presence,
+			RepeatPenalty: &repeat, Seed: &seed, Stop: []string{"END"},
+		},
+	}
+	if err := req.ValidateGenerate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateGenerateRejectsRunnerSamplingBounds(t *testing.T) {
+	nan := math.NaN()
+	topK := -1
+	minP := 1.1
+	presence := 2.1
+	repeat := 0.0
+	seed := uint64(math.MaxUint32) + 1
+	tests := []struct {
+		name     string
+		settings GenerationSettings
+	}{
+		{"nan temperature", GenerationSettings{Temperature: &nan}},
+		{"negative top k", GenerationSettings{TopK: &topK}},
+		{"large min p", GenerationSettings{MinP: &minP}},
+		{"large presence penalty", GenerationSettings{PresencePenalty: &presence}},
+		{"zero repeat penalty", GenerationSettings{RepeatPenalty: &repeat}},
+		{"nonportable seed", GenerationSettings{Seed: &seed}},
+		{"too many stops", GenerationSettings{Stop: make([]string, maximumGenerationStops+1)}},
+		{"oversized stop", GenerationSettings{Stop: []string{strings.Repeat("x", maximumGenerationStopBytes+1)}}},
+		{"invalid stop utf8", GenerationSettings{Stop: []string{string([]byte{0xff})}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := Request{Type: MessageGenerate, ID: "req", Input: &Input{Kind: "prompt", Prompt: "hello"}, Settings: test.settings}
+			if err := req.ValidateGenerate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -98,6 +99,11 @@ func runConfig(mode locations.Mode, paths locations.Paths, args []string) {
 	residentID := flags.String("resident", "", "selected variant to keep resident")
 	runnerCommand := flags.String("runner", "yllama-runner", "yllama runner command")
 	threads := flags.Int("threads", runtime.NumCPU(), "runner thread count")
+	gpuLayersDefault := 0
+	if runtime.GOOS == "darwin" {
+		gpuLayersDefault = -1
+	}
+	gpuLayers := flags.Int("gpu-layers", gpuLayersDefault, "runner GPU layers (-1 automatic, 0 CPU-only)")
 	output := flags.String("output", paths.ConfigFile, "configuration output path")
 	force := flags.Bool("force", false, "replace an existing configuration")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -131,6 +137,7 @@ func runConfig(mode locations.Mode, paths locations.Paths, args []string) {
 		ResidentID:    *residentID,
 		RunnerCommand: *runnerCommand,
 		Threads:       *threads,
+		GPULayers:     *gpuLayers,
 	})
 	if err != nil {
 		fatal(err)
@@ -961,6 +968,13 @@ func runGenerate(socketPath string, args []string) {
 	stream := generateFlags.Bool("stream", true, "stream text deltas")
 	output := generateFlags.String("output", "json", "output format: json or text")
 	maxTokens := generateFlags.Int("max-tokens", 128, "maximum output tokens")
+	temperature := generateFlags.Float64("temperature", 0.8, "sampling temperature")
+	topP := generateFlags.Float64("top-p", 0.95, "top-p sampling threshold")
+	topK := generateFlags.Int("top-k", 40, "top-k sampling limit; 0 disables it")
+	minP := generateFlags.Float64("min-p", 0.05, "minimum probability sampling threshold")
+	presencePenalty := generateFlags.Float64("presence-penalty", 0, "presence penalty from -2 to 2")
+	repeatPenalty := generateFlags.Float64("repeat-penalty", 1, "repeat penalty greater than zero")
+	seed := generateFlags.Uint64("seed", math.MaxUint64, "random seed; max uint64 selects runner randomness")
 	if err := generateFlags.Parse(args); err != nil {
 		fatal(err)
 	}
@@ -998,7 +1012,9 @@ func runGenerate(socketPath string, args []string) {
 			Prompt: *prompt,
 		},
 		Settings: protocol.GenerationSettings{
-			MaxTokens: maxTokens,
+			MaxTokens: maxTokens, Temperature: temperature, TopP: topP,
+			TopK: topK, MinP: minP, PresencePenalty: presencePenalty,
+			RepeatPenalty: repeatPenalty, Seed: seed,
 			Output: &protocol.Output{
 				Format:   outputFormat,
 				Delivery: outputDelivery(*stream),

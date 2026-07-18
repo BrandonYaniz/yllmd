@@ -38,6 +38,7 @@ local_models:
     runtime:
       context_tokens: 8192
       threads: 4
+      gpu_layers: 0
 
   balanced:
     catalog_id: qwen2_5_7b_instruct_q4
@@ -51,6 +52,7 @@ local_models:
     runtime:
       context_tokens: 16384
       threads: 8
+      gpu_layers: 0
 
   deep:
     catalog_id: qwen2_5_14b_instruct_q4
@@ -64,6 +66,7 @@ local_models:
     runtime:
       context_tokens: 32768
       threads: 12
+      gpu_layers: 0
 
 remote_providers:
   openai:

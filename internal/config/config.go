@@ -74,6 +74,7 @@ type LocalBackendConfig struct {
 type LocalRuntimeSettings struct {
 	ContextTokens int `yaml:"context_tokens"`
 	Threads       int `yaml:"threads"`
+	GPULayers     int `yaml:"gpu_layers"`
 }
 
 type RemoteProviderConfig struct {
@@ -164,6 +165,9 @@ func (c Config) Validate() error {
 		}
 		if model.Runtime.Threads <= 0 {
 			errs = append(errs, fmt.Errorf("local_models.%s.runtime.threads must be positive", name))
+		}
+		if model.Runtime.GPULayers < -1 {
+			errs = append(errs, fmt.Errorf("local_models.%s.runtime.gpu_layers must be -1, 0, or positive", name))
 		}
 	}
 	for name, provider := range c.RemoteProviders {

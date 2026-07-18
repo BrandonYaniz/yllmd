@@ -60,6 +60,8 @@ install -d -o yllmd -g yllm -m 0750 /var/lib/yllmd /var/lib/yllmd/models /var/ru
 
 Edit `/usr/local/etc/yllmd/config.yaml` for the local model tiers and runner path before starting the service.
 
+Install `yllama-runner` `26.07.16.01-Release` or newer. `yllmd` selects protocol 2 and refuses startup frames that report an older version, missing capabilities, or a smaller context than configured.
+
 ## Linux systemd
 
 Create the service account:

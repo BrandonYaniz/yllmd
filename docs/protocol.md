@@ -7,13 +7,15 @@ The daemon does not expose HTTP or HTTPS.
 ## Generate request
 
 ```json
-{"type":"generate","id":"req-001","provider":"local","model_type":"llm","level":"balanced","input":{"kind":"messages","messages":[{"role":"system","content":"Answer clearly."},{"role":"user","content":"Summarize this."}]},"settings":{"temperature":0.2,"max_tokens":800,"output":{"format":"json","delivery":"stream"}},"queue":{"policy":"wait","timeout_ms":60000}}
+{"type":"generate","id":"req-001","provider":"local","model_type":"llm","level":"balanced","input":{"kind":"messages","messages":[{"role":"system","content":"Answer clearly."},{"role":"user","content":"Summarize this."}]},"settings":{"temperature":0.2,"top_p":0.95,"top_k":40,"min_p":0.05,"presence_penalty":0,"repeat_penalty":1.1,"seed":42,"max_tokens":800,"stop":["END"],"output":{"format":"json","delivery":"stream"}},"queue":{"policy":"wait","timeout_ms":60000}}
 ```
 
 Generate requests support two independent output options:
 
 - `settings.output.format`: `json`, `text`, or `raw`. `raw` is an alias for `text`. Defaults to `json`.
 - `settings.output.delivery`: `stream` or `complete`. Defaults to `stream`.
+
+Sampling settings are optional. Supported fields are `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`, `seed`, `max_tokens`, and `stop`. They are applied per request without reloading the resident model. Explicit seeds range from 0 through `4294967295`; `18446744073709551615` requests runner-selected randomness. Up to 64 nonempty UTF-8 stop strings are accepted, with a combined size limit of 64 KiB.
 
 The legacy `settings.stream` and top-level `stream` booleans are still accepted when `settings.output` is omitted. The legacy top-level `output_format` field is also accepted as a compatibility alias, but new clients should use `settings.output`.
 
@@ -47,8 +49,10 @@ Text responses are one-shot raw responses for generate requests. The daemon clos
 ## Completed response
 
 ```json
-{"type":"completed","id":"req-001","finish_reason":"stop","usage":{"input_tokens":100,"output_tokens":80},"text":"Full generated text."}
+{"type":"completed","id":"req-001","finish_reason":"stop","usage":{"input_tokens":100,"output_tokens":80,"total_tokens":180},"text":"Full generated text."}
 ```
+
+`finish_reason` is `eos`, `length`, or `stop`. A cancelled request returns a terminal `cancelled` event instead.
 
 ## Error response
 

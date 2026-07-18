@@ -19,6 +19,7 @@ type Options struct {
 	ResidentID    string
 	RunnerCommand string
 	Threads       int
+	GPULayers     int
 }
 
 type generatedConfig struct {
@@ -64,6 +65,9 @@ func Generate(options Options) ([]byte, error) {
 	if options.Threads <= 0 {
 		return nil, errors.New("threads must be positive")
 	}
+	if options.GPULayers < -1 {
+		return nil, errors.New("gpu layers must be -1, 0, or positive")
+	}
 
 	variants := append([]catalog.Variant(nil), options.Variants...)
 	sort.Slice(variants, func(i, j int) bool { return variants[i].ID < variants[j].ID })
@@ -95,6 +99,7 @@ func Generate(options Options) ([]byte, error) {
 			Runtime: config.LocalRuntimeSettings{
 				ContextTokens: contextTokens(variant.Level),
 				Threads:       options.Threads,
+				GPULayers:     options.GPULayers,
 			},
 		}
 	}

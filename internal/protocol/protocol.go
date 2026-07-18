@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 type MessageType string
@@ -16,6 +18,9 @@ const (
 	MessageStatus    MessageType = "status"
 	MessageModels    MessageType = "models"
 	MessageProviders MessageType = "providers"
+
+	maximumGenerationStops     = 64
+	maximumGenerationStopBytes = 64 << 10
 )
 
 type Request struct {
@@ -50,12 +55,17 @@ type Message struct {
 }
 
 type GenerationSettings struct {
-	Temperature *float64 `json:"temperature,omitempty"`
-	TopP        *float64 `json:"top_p,omitempty"`
-	MaxTokens   *int     `json:"max_tokens,omitempty"`
-	Stop        []string `json:"stop,omitempty"`
-	Stream      *bool    `json:"stream,omitempty"`
-	Output      *Output  `json:"output,omitempty"`
+	Temperature     *float64 `json:"temperature,omitempty"`
+	TopP            *float64 `json:"top_p,omitempty"`
+	MaxTokens       *int     `json:"max_tokens,omitempty"`
+	TopK            *int     `json:"top_k,omitempty"`
+	MinP            *float64 `json:"min_p,omitempty"`
+	PresencePenalty *float64 `json:"presence_penalty,omitempty"`
+	RepeatPenalty   *float64 `json:"repeat_penalty,omitempty"`
+	Seed            *uint64  `json:"seed,omitempty"`
+	Stop            []string `json:"stop,omitempty"`
+	Stream          *bool    `json:"stream,omitempty"`
+	Output          *Output  `json:"output,omitempty"`
 }
 
 type Output struct {
@@ -298,18 +308,41 @@ func (r Request) ValidateGenerate() error {
 	default:
 		return fmt.Errorf("unsupported input kind %q", r.Input.Kind)
 	}
-	if r.Settings.Temperature != nil && *r.Settings.Temperature < 0 {
-		return fmt.Errorf("temperature must be greater than or equal to 0")
+	if r.Settings.Temperature != nil && (!finite(*r.Settings.Temperature) || *r.Settings.Temperature < 0 || *r.Settings.Temperature > 100) {
+		return fmt.Errorf("temperature must be finite and in the range [0, 100]")
 	}
-	if r.Settings.TopP != nil && (*r.Settings.TopP <= 0 || *r.Settings.TopP > 1) {
-		return fmt.Errorf("top_p must be in the range (0, 1]")
+	if r.Settings.TopP != nil && (!finite(*r.Settings.TopP) || *r.Settings.TopP <= 0 || *r.Settings.TopP > 1) {
+		return fmt.Errorf("top_p must be finite and in the range (0, 1]")
 	}
-	if r.Settings.MaxTokens != nil && *r.Settings.MaxTokens <= 0 {
-		return fmt.Errorf("max_tokens must be positive")
+	if r.Settings.MaxTokens != nil && (*r.Settings.MaxTokens <= 0 || *r.Settings.MaxTokens > 1_000_000) {
+		return fmt.Errorf("max_tokens must be in the range [1, 1000000]")
 	}
+	if r.Settings.TopK != nil && (*r.Settings.TopK < 0 || *r.Settings.TopK > 1_000_000) {
+		return fmt.Errorf("top_k must be in the range [0, 1000000]")
+	}
+	if r.Settings.MinP != nil && (!finite(*r.Settings.MinP) || *r.Settings.MinP < 0 || *r.Settings.MinP > 1) {
+		return fmt.Errorf("min_p must be finite and in the range [0, 1]")
+	}
+	if r.Settings.PresencePenalty != nil && (!finite(*r.Settings.PresencePenalty) || *r.Settings.PresencePenalty < -2 || *r.Settings.PresencePenalty > 2) {
+		return fmt.Errorf("presence_penalty must be finite and in the range [-2, 2]")
+	}
+	if r.Settings.RepeatPenalty != nil && (!finite(*r.Settings.RepeatPenalty) || *r.Settings.RepeatPenalty <= 0 || *r.Settings.RepeatPenalty > 100) {
+		return fmt.Errorf("repeat_penalty must be finite and in the range (0, 100]")
+	}
+	if r.Settings.Seed != nil && *r.Settings.Seed != math.MaxUint64 && *r.Settings.Seed > math.MaxUint32 {
+		return fmt.Errorf("seed must be in the range [0, %d], or %d for runner randomness", uint64(math.MaxUint32), uint64(math.MaxUint64))
+	}
+	if len(r.Settings.Stop) > maximumGenerationStops {
+		return fmt.Errorf("stop must contain at most %d entries", maximumGenerationStops)
+	}
+	totalStopBytes := 0
 	for i, stop := range r.Settings.Stop {
-		if stop == "" {
-			return fmt.Errorf("stop[%d] must not be empty", i)
+		if stop == "" || !utf8.ValidString(stop) {
+			return fmt.Errorf("stop[%d] must be nonempty valid UTF-8", i)
+		}
+		totalStopBytes += len(stop)
+		if len(stop) > maximumGenerationStopBytes || totalStopBytes > maximumGenerationStopBytes {
+			return fmt.Errorf("stop strings must not exceed %d bytes", maximumGenerationStopBytes)
 		}
 	}
 	if r.Settings.Output != nil {
@@ -341,6 +374,10 @@ func (r Request) ValidateGenerate() error {
 		return fmt.Errorf("model_type %q is not supported", r.ModelType)
 	}
 	return nil
+}
+
+func finite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func validRole(role string) bool {

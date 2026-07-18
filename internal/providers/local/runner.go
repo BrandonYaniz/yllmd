@@ -2,13 +2,12 @@ package local
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -23,13 +22,15 @@ import (
 )
 
 const (
-	runnerFrameChunk byte = 0x01
-	runnerFrameDone  byte = 0x02
-	runnerFrameError byte = 0x03
-
 	defaultRunnerMaxTokens   = 128
 	defaultRunnerTemperature = 0.8
 	defaultRunnerTopP        = 0.95
+	defaultRunnerTopK        = 40
+	defaultRunnerMinP        = 0.05
+	defaultRunnerPresence    = 0.0
+	defaultRunnerRepeat      = 1.0
+	runnerStartupTimeout     = 120 * time.Second
+	runnerCancelTimeout      = 5 * time.Second
 )
 
 type RunnerProvider struct {
@@ -45,7 +46,6 @@ type RunnerProvider struct {
 
 type runnerSession struct {
 	modelName string
-	options   runnerOptions
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
 	frames    <-chan frameResult
@@ -56,14 +56,14 @@ type runnerSession struct {
 }
 
 type runnerOptions struct {
-	temperature float64
-	topP        float64
-	maxTokens   int
-}
-
-type runnerFrame struct {
-	tag     byte
-	payload []byte
+	temperature     float64
+	topP            float64
+	maxTokens       int
+	topK            int
+	minP            float64
+	presencePenalty float64
+	repeatPenalty   float64
+	seed            uint64
 }
 
 func NewRunnerProvider(cfg config.Config, logger *slog.Logger) *RunnerProvider {
@@ -93,7 +93,7 @@ func (p *RunnerProvider) Generate(ctx context.Context, request providers.Generat
 }
 
 func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, request providers.GenerateRequest, events chan<- protocol.Event) error {
-	prompt, err := runnerPrompt(model, request.Input)
+	prepared, err := prepareRunnerInput(model, request.Input)
 	if err != nil {
 		return err
 	}
@@ -104,68 +104,88 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 	p.stopCooldownLocked()
 
 	options := effectiveRunnerOptions(request.Settings)
-	session, err := p.sessionFor(ctx, model, options)
+	session, err := p.sessionFor(ctx, model)
 	if err != nil {
 		return err
 	}
 	defer p.scheduleCooldownLocked(model.Name, epoch)
 
-	cancelDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = session.close(context.Background(), "cancel")
-		case <-cancelDone:
-		}
-	}()
-	defer close(cancelDone)
-
 	if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: model.Name}) {
 		return nil
 	}
 
-	if err := session.writePrompt(prompt); err != nil {
-		p.discardSession(ctx)
-		return fmt.Errorf("send runner prompt: %w", err)
+	generate := runnerGenerate{
+		prompt:           prepared.prompt,
+		tokenizationMode: prepared.tokenizationMode,
+		maxTokens:        uint32(options.maxTokens),
+		temperature:      options.temperature,
+		topP:             options.topP,
+		topK:             int32(options.topK),
+		minP:             options.minP,
+		presencePenalty:  options.presencePenalty,
+		repeatPenalty:    options.repeatPenalty,
+		seed:             options.seed,
+		stops:            request.Settings.Stop,
+	}
+	if err := session.writeGenerate(generate); err != nil {
+		p.discardSession(context.Background())
+		return fmt.Errorf("send runner Generate: %w", err)
 	}
 
-	stopFilter := newRunnerStopFilter(request.Settings.Stop)
 	var completed strings.Builder
 	for {
 		frame, err := session.readFrame(ctx)
 		if err != nil {
-			p.discardSession(ctx)
+			if ctx.Err() != nil {
+				if drainErr := session.cancelAndDrain(); drainErr == nil {
+					return nil
+				} else {
+					p.logger.Debug("runner cancellation failed", "model", model.Name, "error", drainErr)
+				}
+			}
+			p.discardSession(context.Background())
 			return err
 		}
 		switch frame.tag {
 		case runnerFrameChunk:
-			text := string(frame.payload)
-			emit, stopped := stopFilter.push(text)
-			if emit != "" {
-				completed.WriteString(emit)
-				if request.Stream && !sendRunnerEvent(ctx, events, protocol.Event{Type: "delta", ID: request.ID, Text: emit}) {
-					return nil
+			completed.WriteString(frame.chunk)
+			if request.Stream && !sendRunnerEvent(ctx, events, protocol.Event{Type: "delta", ID: request.ID, Text: frame.chunk}) {
+				if drainErr := session.cancelAndDrain(); drainErr != nil {
+					p.discardSession(context.Background())
 				}
-			}
-			if stopped {
-				p.discardSession(context.Background())
-				_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "completed", ID: request.ID, FinishReason: "stop", Text: completed.String()})
 				return nil
 			}
-		case runnerFrameDone:
-			if emit := stopFilter.flush(); emit != "" {
-				completed.WriteString(emit)
-				if request.Stream && !sendRunnerEvent(ctx, events, protocol.Event{Type: "delta", ID: request.ID, Text: emit}) {
-					return nil
-				}
+		case runnerFrameCompleted:
+			usage := &protocol.Usage{
+				InputTokens:  int(frame.completed.inputTokens),
+				OutputTokens: int(frame.completed.outputTokens),
 			}
-			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "completed", ID: request.ID, FinishReason: "stop", Text: completed.String()})
+			usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+			finishReason := runnerFinishReason(frame.completed.finishReason)
+			if finishReason == "cancelled" {
+				_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "cancelled", ID: request.ID})
+				return nil
+			}
+			_ = sendRunnerEvent(ctx, events, protocol.Event{
+				Type:         "completed",
+				ID:           request.ID,
+				FinishReason: finishReason,
+				Text:         completed.String(),
+				Usage:        usage,
+			})
 			return nil
 		case runnerFrameError:
-			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "error", ID: request.ID, Code: "runner_error", Message: string(frame.payload)})
+			if frame.runnerError == nil {
+				p.discardSession(context.Background())
+				return errors.New("runner returned an empty Error frame")
+			}
+			if runnerErrorIsFatal(frame.runnerError.code) {
+				p.discardSession(context.Background())
+			}
+			_ = sendRunnerEvent(ctx, events, protocol.Event{Type: "error", ID: request.ID, Code: frame.runnerError.code, Message: frame.runnerError.message})
 			return nil
 		default:
-			p.discardSession(ctx)
+			p.discardSession(context.Background())
 			return fmt.Errorf("unknown runner frame tag 0x%02x", frame.tag)
 		}
 	}
@@ -173,9 +193,14 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 
 func effectiveRunnerOptions(settings protocol.GenerationSettings) runnerOptions {
 	options := runnerOptions{
-		temperature: defaultRunnerTemperature,
-		topP:        defaultRunnerTopP,
-		maxTokens:   defaultRunnerMaxTokens,
+		temperature:     defaultRunnerTemperature,
+		topP:            defaultRunnerTopP,
+		maxTokens:       defaultRunnerMaxTokens,
+		topK:            defaultRunnerTopK,
+		minP:            defaultRunnerMinP,
+		presencePenalty: defaultRunnerPresence,
+		repeatPenalty:   defaultRunnerRepeat,
+		seed:            math.MaxUint64,
 	}
 	if settings.Temperature != nil {
 		options.temperature = *settings.Temperature
@@ -186,36 +211,73 @@ func effectiveRunnerOptions(settings protocol.GenerationSettings) runnerOptions 
 	if settings.MaxTokens != nil {
 		options.maxTokens = *settings.MaxTokens
 	}
+	if settings.TopK != nil {
+		options.topK = *settings.TopK
+	}
+	if settings.MinP != nil {
+		options.minP = *settings.MinP
+	}
+	if settings.PresencePenalty != nil {
+		options.presencePenalty = *settings.PresencePenalty
+	}
+	if settings.RepeatPenalty != nil {
+		options.repeatPenalty = *settings.RepeatPenalty
+	}
+	if settings.Seed != nil {
+		options.seed = *settings.Seed
+	}
 	return options
 }
 
-func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error) {
+type preparedRunnerInput struct {
+	prompt           string
+	tokenizationMode byte
+}
+
+func prepareRunnerInput(model models.LocalModel, input protocol.Input) (preparedRunnerInput, error) {
 	if input.Kind == "prompt" {
-		return input.Prompt, nil
+		return preparedRunnerInput{prompt: input.Prompt, tokenizationMode: runnerTokenizationRaw}, nil
 	}
 	template, err := catalogPromptTemplate(model.Config.CatalogID)
 	if err != nil {
-		return "", err
+		return preparedRunnerInput{}, err
 	}
+	prompt, err := renderRunnerMessages(template, model.Config.CatalogID, input.Messages)
+	if err != nil {
+		return preparedRunnerInput{}, err
+	}
+	mode := runnerTokenizationRaw
+	if template != "" {
+		mode = runnerTokenizationFormatted
+	}
+	return preparedRunnerInput{prompt: prompt, tokenizationMode: mode}, nil
+}
+
+func runnerPrompt(model models.LocalModel, input protocol.Input) (string, error) {
+	prepared, err := prepareRunnerInput(model, input)
+	return prepared.prompt, err
+}
+
+func renderRunnerMessages(template, catalogID string, messages []protocol.Message) (string, error) {
 	switch template {
 	case "":
-		return plainMessagesPrompt(input.Messages), nil
+		return plainMessagesPrompt(messages), nil
 	case "qwen2.5-chatml":
-		return qwenChatMLPrompt(input.Messages), nil
+		return qwenChatMLPrompt(messages), nil
 	case "phi4-chat":
-		return phi4ChatPrompt(input.Messages), nil
+		return phi4ChatPrompt(messages), nil
 	case "gemma3-chat":
-		return gemma3ChatPrompt(input.Messages)
+		return gemma3ChatPrompt(messages)
 	case "llama3-instruct":
-		return llama3InstructPrompt(input.Messages), nil
+		return llama3InstructPrompt(messages), nil
 	case "granite3-chat":
-		return granite3ChatPrompt(input.Messages, time.Now())
+		return granite3ChatPrompt(messages, time.Now())
 	case "mistral-nemo-instruct":
-		return mistralNemoInstructPrompt(input.Messages)
+		return mistralNemoInstructPrompt(messages)
 	case "qwen3-nonthinking-chatml":
-		return qwen3NonThinkingPrompt(input.Messages)
+		return qwen3NonThinkingPrompt(messages)
 	default:
-		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", model.Config.CatalogID, template)
+		return "", fmt.Errorf("catalog variant %q requires unsupported prompt template %q", catalogID, template)
 	}
 }
 
@@ -430,63 +492,6 @@ func qwen3NonThinkingPrompt(messages []protocol.Message) (string, error) {
 	return prompt.String(), nil
 }
 
-type runnerStopFilter struct {
-	stops      []string
-	maxKeep    int
-	pending    string
-	terminated bool
-}
-
-func newRunnerStopFilter(stops []string) *runnerStopFilter {
-	filter := &runnerStopFilter{stops: stops}
-	for _, stop := range stops {
-		if len(stop) > filter.maxKeep {
-			filter.maxKeep = len(stop) - 1
-		}
-	}
-	return filter
-}
-
-func (f *runnerStopFilter) push(text string) (string, bool) {
-	if len(f.stops) == 0 || f.terminated {
-		return text, f.terminated
-	}
-	f.pending += text
-	if index := f.firstStopIndex(); index >= 0 {
-		f.terminated = true
-		emit := f.pending[:index]
-		f.pending = ""
-		return emit, true
-	}
-	if len(f.pending) <= f.maxKeep {
-		return "", false
-	}
-	emitLen := len(f.pending) - f.maxKeep
-	emit := f.pending[:emitLen]
-	f.pending = f.pending[emitLen:]
-	return emit, false
-}
-
-func (f *runnerStopFilter) flush() string {
-	if len(f.stops) == 0 || f.terminated {
-		return ""
-	}
-	emit := f.pending
-	f.pending = ""
-	return emit
-}
-
-func (f *runnerStopFilter) firstStopIndex() int {
-	first := -1
-	for _, stop := range f.stops {
-		index := strings.Index(f.pending, stop)
-		if index >= 0 && (first == -1 || index < first) {
-			first = index
-		}
-	}
-	return first
-}
-
 func (p *RunnerProvider) Close(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -532,11 +537,7 @@ func (p *RunnerProvider) scheduleCooldownLocked(modelName string, epoch uint64) 
 			p.logger.Debug("runner shutdown during idle cooldown failed", "model", p.session.modelName, "error", err)
 		}
 		p.session = nil
-		session, err := p.startSession(ctx, resident, runnerOptions{
-			temperature: defaultRunnerTemperature,
-			topP:        defaultRunnerTopP,
-			maxTokens:   defaultRunnerMaxTokens,
-		})
+		session, err := p.startSession(ctx, resident)
 		if err != nil {
 			p.logger.Debug("resident model reload after cooldown failed", "model", resident.Name, "error", err)
 			return
@@ -545,8 +546,8 @@ func (p *RunnerProvider) scheduleCooldownLocked(modelName string, epoch uint64) 
 	})
 }
 
-func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel, options runnerOptions) (*runnerSession, error) {
-	if p.session != nil && p.session.modelName == model.Name && p.session.options == options {
+func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel) (*runnerSession, error) {
+	if p.session != nil && p.session.modelName == model.Name {
 		return p.session, nil
 	}
 	if p.session != nil {
@@ -555,7 +556,7 @@ func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel
 		}
 		p.session = nil
 	}
-	session, err := p.startSession(ctx, model, options)
+	session, err := p.startSession(ctx, model)
 	if err != nil {
 		return nil, err
 	}
@@ -563,14 +564,13 @@ func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel
 	return session, nil
 }
 
-func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalModel, options runnerOptions) (*runnerSession, error) {
+func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalModel) (*runnerSession, error) {
 	cmd := exec.Command(model.Config.Backend.Command,
+		"--protocol", strconv.Itoa(runnerProtocolVersion),
 		"--model", model.ModelPath,
 		"--ctx", strconv.Itoa(model.Config.Runtime.ContextTokens),
 		"--threads", strconv.Itoa(model.Config.Runtime.Threads),
-		"--max-tokens", strconv.Itoa(options.maxTokens),
-		"--temperature", strconv.FormatFloat(options.temperature, 'f', -1, 64),
-		"--top-p", strconv.FormatFloat(options.topP, 'f', -1, 64),
+		"--gpu-layers", strconv.Itoa(model.Config.Runtime.GPULayers),
 	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -597,11 +597,29 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 	}()
 	session := &runnerSession{
 		modelName: model.Name,
-		options:   options,
 		cmd:       cmd,
 		stdin:     stdin,
 		frames:    frames,
 		done:      done,
+	}
+	startupCtx, startupCancel := context.WithTimeout(ctx, runnerStartupTimeout)
+	defer startupCancel()
+	frame, err := session.readFrame(startupCtx)
+	if err != nil {
+		_ = session.close(context.Background(), "startup-failed")
+		return nil, fmt.Errorf("wait for runner Ready: %w", err)
+	}
+	if frame.tag == runnerFrameError && frame.runnerError != nil {
+		_ = session.close(context.Background(), "startup-error")
+		return nil, fmt.Errorf("runner startup: %w", *frame.runnerError)
+	}
+	if frame.tag != runnerFrameReady {
+		_ = session.close(context.Background(), "startup-invalid")
+		return nil, fmt.Errorf("runner first frame 0x%02x is not Ready", frame.tag)
+	}
+	if err := validateRunnerReady(frame.ready, model.Config.Runtime.ContextTokens); err != nil {
+		_ = session.close(context.Background(), "startup-invalid")
+		return nil, err
 	}
 	return session, nil
 }
@@ -614,12 +632,77 @@ func (p *RunnerProvider) discardSession(ctx context.Context) {
 	p.session = nil
 }
 
-func (s *runnerSession) writePrompt(prompt string) error {
-	return writeRunnerPrompt(&s.stdinMu, s.stdin, prompt)
+func (s *runnerSession) writeGenerate(request runnerGenerate) error {
+	s.stdinMu.Lock()
+	defer s.stdinMu.Unlock()
+	return writeRunnerGenerate(s.stdin, request)
 }
 
 func (s *runnerSession) readFrame(ctx context.Context) (runnerFrame, error) {
 	return readRunnerFrame(ctx, s.frames)
+}
+
+func (s *runnerSession) cancelAndDrain() error {
+	s.stdinMu.Lock()
+	err := writeRunnerControl(s.stdin, runnerMessageCancel)
+	s.stdinMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("send runner Cancel: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerCancelTimeout)
+	defer cancel()
+	for {
+		frame, err := s.readFrame(ctx)
+		if err != nil {
+			return fmt.Errorf("wait for runner cancellation: %w", err)
+		}
+		switch frame.tag {
+		case runnerFrameChunk:
+			continue
+		case runnerFrameCompleted:
+			if frame.completed.finishReason == 3 {
+				return nil
+			}
+			// The request completed before Cancel was observed. The queued Cancel
+			// will now be answered with no_active_request; consume it so the next
+			// Generate starts on a clean protocol stream.
+			followup, err := s.readFrame(ctx)
+			if err != nil {
+				return fmt.Errorf("drain late runner Cancel: %w", err)
+			}
+			if followup.tag == runnerFrameError && followup.runnerError != nil && followup.runnerError.code == "no_active_request" {
+				return nil
+			}
+			return fmt.Errorf("unexpected frame 0x%02x after late runner Cancel", followup.tag)
+		case runnerFrameError:
+			if frame.runnerError != nil {
+				return fmt.Errorf("runner cancellation: %w", *frame.runnerError)
+			}
+			return errors.New("runner cancellation returned empty Error")
+		default:
+			return fmt.Errorf("unexpected runner frame 0x%02x during cancellation", frame.tag)
+		}
+	}
+}
+
+func validateRunnerReady(ready runnerReady, requestedContext int) error {
+	if ready.protocol != runnerProtocolVersion {
+		return fmt.Errorf("runner selected protocol %d, want %d", ready.protocol, runnerProtocolVersion)
+	}
+	if ready.capabilities&runnerRequiredCapabilities != runnerRequiredCapabilities {
+		return fmt.Errorf("runner capabilities 0x%x do not include required 0x%x", ready.capabilities, runnerRequiredCapabilities)
+	}
+	if ready.contextSize < uint32(requestedContext) {
+		return fmt.Errorf("runner context size %d is smaller than requested %d", ready.contextSize, requestedContext)
+	}
+	comparison, err := compareRunnerVersions(ready.version, runnerProtocolMinimum)
+	if err != nil {
+		return err
+	}
+	if comparison < 0 {
+		return fmt.Errorf("runner version %s is older than required %s", ready.version, runnerProtocolMinimum)
+	}
+	return nil
 }
 
 func (s *runnerSession) close(ctx context.Context, _ string) error {
@@ -630,7 +713,10 @@ func (s *runnerSession) close(ctx context.Context, _ string) error {
 	}
 	s.closed = true
 
+	s.stdinMu.Lock()
+	_ = writeRunnerControl(s.stdin, runnerMessageShutdown)
 	_ = s.stdin.Close()
+	s.stdinMu.Unlock()
 	select {
 	case err := <-s.done:
 		return err
@@ -649,11 +735,11 @@ func (s *runnerSession) close(ctx context.Context, _ string) error {
 }
 
 func readRunnerFrames(stdout io.Reader) <-chan frameResult {
-	frames := make(chan frameResult, 1)
+	frames := make(chan frameResult, 4)
 	go func() {
 		defer close(frames)
 		for {
-			frame, err := readBinaryRunnerFrame(stdout)
+			frame, err := readRunnerProtocolFrame(stdout)
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
 					frames <- frameResult{err: err}
@@ -671,54 +757,6 @@ type frameResult struct {
 	err   error
 }
 
-func readBinaryRunnerFrame(stdout io.Reader) (runnerFrame, error) {
-	var tag [1]byte
-	if _, err := io.ReadFull(stdout, tag[:]); err != nil {
-		return runnerFrame{}, err
-	}
-	switch tag[0] {
-	case runnerFrameChunk:
-		payload, err := readSizedPayload(stdout, 4)
-		if err != nil {
-			return runnerFrame{}, err
-		}
-		return runnerFrame{tag: tag[0], payload: payload}, nil
-	case runnerFrameDone:
-		return runnerFrame{tag: tag[0]}, nil
-	case runnerFrameError:
-		payload, err := readSizedPayload(stdout, 2)
-		if err != nil {
-			return runnerFrame{}, err
-		}
-		return runnerFrame{tag: tag[0], payload: payload}, nil
-	default:
-		return runnerFrame{}, fmt.Errorf("unknown runner frame tag 0x%02x", tag[0])
-	}
-}
-
-func readSizedPayload(stdout io.Reader, lengthBytes int) ([]byte, error) {
-	header := make([]byte, lengthBytes)
-	if _, err := io.ReadFull(stdout, header); err != nil {
-		return nil, err
-	}
-	var length uint32
-	switch lengthBytes {
-	case 2:
-		length = uint32(binary.LittleEndian.Uint16(header))
-	case 4:
-		length = binary.LittleEndian.Uint32(header)
-	default:
-		return nil, fmt.Errorf("unsupported runner payload length size %d", lengthBytes)
-	}
-	payload := make([]byte, length)
-	if length > 0 {
-		if _, err := io.ReadFull(stdout, payload); err != nil {
-			return nil, err
-		}
-	}
-	return payload, nil
-}
-
 func readRunnerFrame(ctx context.Context, frames <-chan frameResult) (runnerFrame, error) {
 	select {
 	case <-ctx.Done():
@@ -732,21 +770,6 @@ func readRunnerFrame(ctx context.Context, frames <-chan frameResult) (runnerFram
 		}
 		return result.frame, nil
 	}
-}
-
-func writeRunnerPrompt(mu *sync.Mutex, stdin io.Writer, prompt string) error {
-	if uint64(len(prompt)) > uint64(^uint32(0)) {
-		return fmt.Errorf("runner prompt too large")
-	}
-	var frame bytes.Buffer
-	var length [4]byte
-	binary.LittleEndian.PutUint32(length[:], uint32(len(prompt)))
-	frame.Write(length[:])
-	frame.WriteString(prompt)
-	mu.Lock()
-	defer mu.Unlock()
-	_, err := stdin.Write(frame.Bytes())
-	return err
 }
 
 func sendRunnerEvent(ctx context.Context, events chan<- protocol.Event, event protocol.Event) bool {
