@@ -79,10 +79,11 @@ The command writes `~/yllmd/config.yaml` in user mode and the platform's system
 configuration path in daemon mode. Use `-output` to write somewhere else and
 `-force` to replace an existing file.
 
-Configured variants must occupy distinct routing roles. For example, two
-`code.fast` variants may both be installed later, but only one may be assigned
-to that role in a generated configuration. Installing artifacts and assigning
-routing roles are deliberately separate operations.
+The generator uses catalog type and level metadata to suggest familiar routes,
+and selected variants must therefore occupy distinct generated routes.
+Administrators may edit the generated configuration afterward to define arbitrary
+groups and profiles or map several profiles to one model. Installing artifacts
+and assigning routing profiles remain separate operations.
 
 Configuration generation currently warns that draft catalog variants are
 planned. It does not make an unqualified artifact installable.

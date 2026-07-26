@@ -10,7 +10,7 @@ The daemon is designed for systems where multiple local tools need access to a s
 - Use Unix domain sockets instead of TCP or HTTP for local clients.
 - Support FIFO request queueing.
 - Manage local model loading, unloading, cooldowns, updates, and rollback.
-- Route requests to local models by workload type and level through one request shape.
+- Route requests through configuration-defined groups and profiles, or target an exact model.
 - Keep provider credentials in daemon-owned configuration.
 - Keep application-specific prompting outside the daemon.
 
@@ -46,7 +46,7 @@ Implemented:
 - Local runner process integration over binary stdio frames.
 - Curated model discovery, verified download, update, inventory, activation, rollback, and deletion through `yllmctl`.
 - Local model version activation through a `current` symlink.
-- Model routing by `model_type` (`llm` or `code`) and level (`fast`, `balanced`, or `deep`).
+- Configuration-defined model routing groups, profiles, ordered operational fallbacks, and exact-model targeting.
 
 Not yet implemented:
 

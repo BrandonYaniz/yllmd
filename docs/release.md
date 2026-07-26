@@ -22,6 +22,8 @@ Included:
   inventory, activation, rollback, and deletion commands.
 - Local runner integration over binary stdio frames.
 - Local model version activation and rollback.
+- Configuration-defined routing groups and profiles, exact-model targeting, and
+  deterministic operational fallback.
 
 Excluded:
 

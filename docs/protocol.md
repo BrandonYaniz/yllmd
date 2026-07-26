@@ -1,138 +1,76 @@
 # Client Protocol
 
-`yllmd` uses JSON Lines over a Unix domain socket. Each message is one UTF-8 JSON object followed by a newline.
+`yllmd` uses JSON Lines over a Unix domain socket. Each message is one UTF-8
+JSON object followed by a newline; the daemon does not expose HTTP.
 
-The daemon does not expose HTTP or HTTPS.
+## Generation targets
 
-## Generate request
+A routed request names a configuration-defined group and optional profile:
 
 ```json
-{"type":"generate","id":"req-001","provider":"local","model_type":"llm","level":"balanced","input":{"kind":"messages","messages":[{"role":"system","content":"Answer clearly."},{"role":"user","content":"Summarize this."}]},"settings":{"temperature":0.2,"top_p":0.95,"top_k":40,"min_p":0.05,"presence_penalty":0,"repeat_penalty":1.1,"seed":42,"max_tokens":800,"stop":["END"],"output":{"format":"json","delivery":"stream"}},"queue":{"policy":"wait","timeout_ms":60000}}
+{"type":"generate","id":"req-001","provider":"local","target":{"group":"writing","profile":"draft-pass1"},"input":{"kind":"messages","messages":[{"role":"user","content":"Draft the scene."}]},"settings":{"temperature":0.8,"max_tokens":4000,"output":{"format":"json","delivery":"stream"}},"queue":{"policy":"wait","timeout_ms":60000}}
 ```
 
-Generate requests support two independent output options:
+Omitting the profile uses the group's `default_profile`. Omitting `target`
+entirely uses `routing.default`. An exact request bypasses route fallback:
 
-- `settings.output.format`: `json`, `text`, or `raw`. `raw` is an alias for `text`. Defaults to `json`.
-- `settings.output.delivery`: `stream` or `complete`. Defaults to `stream`.
+```json
+{"type":"generate","id":"req-002","provider":"local","target":{"model":"fiction-primary"},"input":{"kind":"prompt","prompt":"Draft the scene."}}
+```
 
-Sampling settings are optional. Supported fields are `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`, `seed`, `max_tokens`, and `stop`. They are applied per request without reloading the resident model. Explicit seeds range from 0 through `4294967295`; `18446744073709551615` requests runner-selected randomness. Up to 64 nonempty UTF-8 stop strings are accepted, with a combined size limit of 64 KiB.
+Exactly one selection mode is allowed: `target.model`, `target.group` with an
+optional `target.profile`, or no target. A profile without a group and any
+combination of exact-model and routed selection are invalid.
 
-The legacy `settings.stream` and top-level `stream` booleans are still accepted when `settings.output` is omitted. The legacy top-level `output_format` field is also accepted as a compatibility alias, but new clients should use `settings.output`.
+## Generation settings and output
 
-This creates four response modes:
+Supported sampling fields are `temperature`, `top_p`, `top_k`, `min_p`,
+`presence_penalty`, `repeat_penalty`, `seed`, `max_tokens`, and `stop`. They are
+applied per request without reloading a model.
 
-- JSON stream: `{"output":{"format":"json","delivery":"stream"}}` returns JSON Lines events as generation progresses.
-- JSON completed: `{"output":{"format":"json","delivery":"complete"}}` returns JSON Lines control events and a terminal `completed` event with full `text`.
-- Text stream: `{"output":{"format":"text","delivery":"stream"}}` returns raw text chunks as they are produced.
-- Text completed: `{"output":{"format":"text","delivery":"complete"}}` delays the response until generation finishes, then returns the raw output text.
+`settings.output.format` is `json`, `text`, or `raw` (`raw` aliases `text`);
+`settings.output.delivery` is `stream` or `complete`. Legacy
+`settings.stream`, top-level `stream`, and `output_format` remain accepted when
+the newer output object is omitted.
 
-Text responses are one-shot raw responses for generate requests. The daemon closes the connection after the terminal output or error line.
-
-## Accepted response
+JSON mode begins with queue acceptance:
 
 ```json
 {"type":"accepted","id":"req-001","queue_position":1}
 ```
 
-## Started response
+The started event records both the resolved route and concrete model:
 
 ```json
-{"type":"started","id":"req-001","provider":"local","model":"balanced"}
+{"type":"started","id":"req-001","provider":"local","target":{"group":"writing","profile":"draft-pass1"},"model":"fiction-primary"}
 ```
 
-## Delta response
+Operational fallback is explicit and reproducible:
 
 ```json
-{"type":"delta","id":"req-001","text":"The issue appears to be"}
+{"type":"started","id":"req-001","provider":"local","target":{"group":"writing","profile":"draft-pass1"},"model":"fiction-review","fallback":true,"fallback_from":"fiction-primary"}
 ```
 
-## Completed response
+Streaming emits `delta` events. Generation ends with `completed`, `cancelled`,
+or `error`:
 
 ```json
 {"type":"completed","id":"req-001","finish_reason":"stop","usage":{"input_tokens":100,"output_tokens":80,"total_tokens":180},"text":"Full generated text."}
 ```
 
-`finish_reason` is `eos`, `length`, or `stop`. A cancelled request returns a terminal `cancelled` event instead.
+## Discovery
 
-## Error response
+`{"type":"models","id":"models-1","action":"list"}` returns concrete `models`,
+route `groups`, and `default_target`. Each group includes its
+`default_profile`; each profile includes its primary `model` and ordered
+`fallbacks`. `action:"routes"` returns only routing discovery metadata.
 
-```json
-{"type":"error","id":"req-001","code":"model_unavailable","message":"Requested model is not available."}
-```
+Other model actions are `installed`, `licenses`, `versions`, `install`,
+`download`, `update`, `delete`, `activate`, and `rollback`.
 
-## Cancel request
+## Other requests
 
-```json
-{"type":"cancel","id":"req-001"}
-```
-
-## Health request
-
-```json
-{"type":"health","id":"health-001"}
-```
-
-## Health response
-
-```json
-{"type":"health","id":"health-001","status":"ok","loaded_model":"fast","queue_depth":0}
-```
-
-## Model names
-
-Clients may request a model by type and level. Supported model types for the current release are:
-
-- `llm`
-- `code`
-
-Supported model levels are:
-
-- `fast`
-- `balanced`
-- `deep`
-
-If `model_type` is omitted, it defaults to `llm`. The legacy `model` field is still accepted for configured model names, tiers, and aliases.
-
-## Provider names
-
-Supported provider values:
-
-- `auto`
-- `local`
-
-For the current local-only release surface, only `local` is implemented. `auto` resolves to the configured default provider, which must be `local`.
-
-The protocol reserves these provider names for future releases:
-
-- `openai`
-- `gemini`
-- `anthropic`
-
-## Model actions
-
-The `models` request supports:
-
-- `list`, list configured models.
-- `installed`, list all installed models and versions, including models not
-  present in configuration.
-- `licenses`, list persisted model-family license acceptance records.
-- `versions`, list installed versions for one configured model.
-- `install`, install a local GGUF file as a version.
-- `download`, download and install a qualified curated catalog variant. Progress
-  is emitted as `download_progress` events with `downloaded_bytes` and
-  `total_bytes`.
-- `update`, install the catalog's current qualified revision for an already
-  installed variant. It returns `up_to_date` without downloading when that
-  revision is present, or `updated` after installing a newer revision.
-- `delete`, delete an unconfigured installed model, or one inactive version when
-  `version` is supplied. Successful responses include `reclaimed_bytes`.
-- `activate`, switch `current` to an installed version while the daemon is idle.
-- `rollback`, restore the previous activation while the daemon is idle.
-
-A `download` or `update` request uses the catalog variant ID in `model`. Families
-with custom terms require `license_accepted: true` the first time. The daemon
-persists acceptance against the exact family, license name, and terms URL; a
-terms change requires renewed acceptance.
-
-Deletion refuses to remove an active version, a version retained as the current
-rollback target, or an entire model that is still present in configuration.
+- `{"type":"cancel","id":"req-001"}` cancels a queued or active request.
+- `health` and `status` report daemon state, loaded model, and queue depth.
+- Provider values are `auto` and `local`; only local generation is currently
+  implemented.

@@ -1,114 +1,108 @@
 # Configuration
 
-`yllmd` uses YAML configuration.
+The configuration separates concrete runnable models from client-facing routes. See
+[`config.example.yaml`](../config.example.yaml) for a complete daemon-mode
+configuration.
 
-## Operating modes
+## Operating modes and generation
 
-`yllmd` and `yllmctl` support two mutually exclusive operating modes. User mode
-is the default.
+User mode is the default and stores configuration, models, logs, and state
+beneath `~/yllmd`. Daemon mode uses platform-specific system paths.
 
 ```text
 yllmd -mode user
-yllmctl -mode user models families
+yllmctl -mode user config create -variant <catalog-id>
 
 yllmd -mode daemon
 yllmctl -mode daemon status
 ```
 
-User mode keeps configuration, models, logs, and state beneath `~/yllmd`:
+`yllmctl config create` writes a configuration and refuses to overwrite an
+existing file unless `-force` is supplied. It creates routes only for the
+selected catalog variants. Catalog `model_type` and `level` values are used as
+generator suggestions; they are not restrictions in the configuration schema.
 
-```text
-~/yllmd/config.yaml
-~/yllmd/models/
-~/yllmd/logs/
-~/yllmd/state/
-```
-
-Daemon mode uses platform-specific system paths:
-
-| Platform | Configuration | Models |
-| --- | --- | --- |
-| Linux | `/etc/yllmd` | `/var/lib/yllmd/models` |
-| FreeBSD | `/usr/local/etc/yllmd` | `/var/db/yllmd/models` |
-| macOS Homebrew (Apple Silicon) | `/opt/homebrew/etc/yllmd` | `/opt/homebrew/var/lib/yllmd/models` |
-| macOS Homebrew (Intel) | `/usr/local/etc/yllmd` | `/usr/local/var/lib/yllmd/models` |
-
-Pass `-config` to `yllmd` or `-socket` to `yllmctl` to override the selected
-mode's default path.
-
-Generate a configuration from curated catalog variants with `yllmctl config
-create`. The generator records the operating mode in the file, chooses paths
-for that mode, and refuses to overwrite an existing configuration unless
-`-force` is supplied.
-
-## Duration values
-
-Duration values use Go-style duration strings:
-
-- `10s`
-- `5m`
-- `15m`
-- `1h`
-- `1h30m`
-
-The idle cooldown is measured from the point when the queue is empty and no request is active. The timer resets whenever new traffic arrives.
-
-## Socket
+## Concrete models
 
 ```yaml
-server:
-  socket_path: /var/run/yllmd/yllmd.sock
-  socket_mode: "0660"
-  socket_group: yllm
-```
-
-Access is controlled by filesystem permissions.
-
-## Queue
-
-```yaml
-queue:
-  policy: fifo
-  max_depth: 128
-  default_timeout: 2m
-```
-
-Requests are processed first in, first out. Future versions may add priority queues.
-
-## Local models
-
-```yaml
-local_models:
-  fast:
-    catalog_id: qwen2_5_1_5b_instruct_q4
-    model_type: llm
-    tier: fast
-    resident: true
+models:
+  fiction-primary:
+    catalog_id: fiction_model_primary
+    aliases: [fiction]
+    enabled: true
+    backend:
+      type: process
+      command: /usr/local/libexec/yllama-runner
+      transport: stdio
     runtime:
-      context_tokens: 8192
+      context_tokens: 32768
       threads: 8
-      gpu_layers: 0
+      gpu_layers: -1
 ```
 
-`model_type` selects the workload family for the model. The current release accepts `llm` and `code`; future releases may add other families such as image, audio, or video. `tier` is the model level and should use `fast`, `balanced`, or `deep` for the standard local routing surface.
+A model has a stable name, a `catalog_id` or `model_path`, runner settings,
+optional aliases, and an optional administrative `enabled` switch. It does not
+have an inherent workload type or performance tier. Identifiers are lowercase,
+1–64 characters, begin with a letter or digit, and may contain `.`, `_`, and
+`-`.
 
-If only one local model is configured, all local model requests may use that model depending on `unavailable_tier_policy`.
+`yllama-runner` is started with the configured model path and runtime settings.
+Use `gpu_layers: 0` for CPU-only execution, a positive number for a fixed
+offload count, or `-1` for automatic full offload.
 
-`yllama-runner` is started once per loaded model with protocol 2 and the configured `model_path`, `runtime.context_tokens`, `runtime.threads`, and `runtime.gpu_layers` values. Use `gpu_layers: 0` for CPU-only execution, a positive value for a fixed number of GPU-offloaded layers, or `-1` to let the runner offload every supported layer.
+## Routing groups and profiles
 
-Generation settings are sent with each request, so changing `max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`, `seed`, or `stop` does not reload the model. `yllmd` requires `yllama-runner` version `26.07.16.01-Release` or newer and validates the runner's protocol, capabilities, and context size before accepting requests.
+```yaml
+routing:
+  default:
+    group: llm
+    profile: balanced
+  unavailable_profile_policy: reject
+  unavailable_model_policy: use_fallback
+  groups:
+    llm:
+      default_profile: balanced
+      profiles:
+        balanced:
+          model: general-balanced
+          fallbacks: [general-fast]
+    writing:
+      default_profile: structure
+      profiles:
+        structure: {model: planner}
+        draft-pass1: {model: fiction-primary}
+        draft-pass2: {model: fiction-primary}
+        continuity:
+          model: fiction-review
+          fallbacks: [planner]
+```
+
+Group and profile names are opaque configuration-defined identifiers. The
+standard generated configuration uses groups such as `llm` and `code` and
+profiles such as `fast`, `balanced`, and `deep`, but these names are neither
+reserved nor required. Several profiles and groups may resolve to the same
+concrete model.
+
+Fallbacks are tried in order only for operational unavailability, including a
+disabled model or runner startup failure. They are not used for content
+quality, schema failures, generation timeouts, or a `length` finish reason.
+Exact-model requests never use route fallbacks.
+
+The global default is used when a request has no target. A group-only request
+uses that group's `default_profile`; it is rejected if none exists.
+
+## Queue, lifecycle, and sampling
+
+The queue remains FIFO. `max_loaded_models` must be `1`. `resident_model` names
+the model restored after idle cooldown and may be omitted to use the globally
+default route.
+
+Sampling settings remain per request and do not reload the resident model.
+Routing profiles do not contain sampling defaults.
+
+Duration values such as `10s`, `15m`, and `1h30m` use Go duration syntax.
 
 ## Remote providers
 
-Remote provider configuration is reserved for future releases. Remote generation is not implemented in the current local-only release surface, and `routing.default_provider` must be `local`.
-
-When remote providers are implemented, credentials should be supplied through environment variables or protected files.
-
-```yaml
-remote_providers:
-  openai:
-    enabled: false
-    api_key_env: OPENAI_API_KEY
-```
-
-Remote providers are disabled by default.
+Remote generation is reserved for future releases. If
+`routing.default_provider` is present, it must currently be `local`.
