@@ -35,8 +35,6 @@ model_lifecycle:
   resident_model: fast
   idle_cooldown: 1m
   max_loaded_models: 1
-  use_current_or_better: true
-  unavailable_tier_policy: use_available
 
 paths:
   state_dir: $TMP_DIR/state
@@ -48,11 +46,9 @@ updates:
   check_interval: 24h
   default_policy: notify
 
-local_models:
+models:
   fast:
     catalog_id: smoke_fast
-    tier: fast
-    resident: true
     backend:
       type: process
       command: /bin/false
@@ -67,9 +63,18 @@ remote_providers:
     api_key_env: OPENAI_API_KEY
 
 routing:
+  default:
+    group: llm
+    profile: fast
+  unavailable_profile_policy: reject
+  unavailable_model_policy: use_fallback
   default_provider: local
-  allow_auto_remote: false
-  require_explicit_remote_provider: true
+  groups:
+    llm:
+      default_profile: fast
+      profiles:
+        fast:
+          model: fast
 EOF
 
 cd "$ROOT_DIR"
@@ -106,8 +111,10 @@ go run ./cmd/yllmctl -socket "$SOCKET_PATH" models install fast -file "$MODEL_PA
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models activate fast -version smoke-v1 | grep '"type": "activated"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models versions fast | grep '"version": "smoke-v1"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models list | grep '"active_version": "smoke-v1"' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" models routes | grep '"default_profile": "fast"' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models updates | grep 'No curated catalog models are installed' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" models update -all | grep 'All installed curated models are up to date' >/dev/null
 go run ./cmd/yllmctl -socket "$SOCKET_PATH" generate -stream=false -prompt "release smoke" | grep 'fake local response: release smoke' >/dev/null
+go run ./cmd/yllmctl -socket "$SOCKET_PATH" generate -model fast -stream=false -prompt "exact smoke" | grep 'fake local response: exact smoke' >/dev/null
 
 echo "smoke ok"

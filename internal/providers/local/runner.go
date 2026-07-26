@@ -78,9 +78,35 @@ func (p *RunnerProvider) ID() string {
 }
 
 func (p *RunnerProvider) Generate(ctx context.Context, request providers.GenerateRequest) (<-chan protocol.Event, error) {
-	model, err := p.registry.ResolveRequest(request.Model, request.ModelType, request.Level)
-	if err != nil {
-		return nil, err
+	modelNames := append([]string{request.Model}, request.FallbackModels...)
+	var model models.LocalModel
+	var startupErr error
+	for index, name := range modelNames {
+		candidate, err := p.registry.Resolve(name)
+		if err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.stopCooldownLocked()
+		_, err = p.sessionFor(ctx, candidate)
+		p.mu.Unlock()
+		if err != nil {
+			startupErr = err
+			continue
+		}
+		model = candidate
+		if index > 0 {
+			request.Fallback = true
+			if request.FallbackFrom == "" {
+				request.FallbackFrom = request.Model
+			}
+			request.Model = candidate.Name
+		}
+		startupErr = nil
+		break
+	}
+	if startupErr != nil {
+		return nil, startupErr
 	}
 	events := make(chan protocol.Event)
 	go func() {
@@ -110,7 +136,7 @@ func (p *RunnerProvider) run(ctx context.Context, model models.LocalModel, reque
 	}
 	defer p.scheduleCooldownLocked(model.Name, epoch)
 
-	if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: model.Name}) {
+	if !sendRunnerEvent(ctx, events, protocol.Event{Type: "started", ID: request.ID, Provider: "local", Target: request.Target, Model: model.Name, Fallback: request.Fallback, FallbackFrom: request.FallbackFrom}) {
 		return nil
 	}
 

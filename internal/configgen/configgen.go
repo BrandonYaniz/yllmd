@@ -23,14 +23,14 @@ type Options struct {
 }
 
 type generatedConfig struct {
-	OperatingMode  string                             `yaml:"operating_mode"`
-	Server         config.ServerConfig                `yaml:"server"`
-	Queue          generatedQueue                     `yaml:"queue"`
-	ModelLifecycle generatedLifecycle                 `yaml:"model_lifecycle"`
-	Paths          config.PathsConfig                 `yaml:"paths"`
-	Updates        generatedUpdates                   `yaml:"updates"`
-	LocalModels    map[string]config.LocalModelConfig `yaml:"local_models"`
-	Routing        config.RoutingConfig               `yaml:"routing"`
+	OperatingMode  string                        `yaml:"operating_mode"`
+	Server         config.ServerConfig           `yaml:"server"`
+	Queue          generatedQueue                `yaml:"queue"`
+	ModelLifecycle generatedLifecycle            `yaml:"model_lifecycle"`
+	Paths          config.PathsConfig            `yaml:"paths"`
+	Updates        generatedUpdates              `yaml:"updates"`
+	Models         map[string]config.ModelConfig `yaml:"models"`
+	Routing        config.RoutingConfig          `yaml:"routing"`
 }
 
 type generatedQueue struct {
@@ -40,11 +40,9 @@ type generatedQueue struct {
 }
 
 type generatedLifecycle struct {
-	ResidentModel         string `yaml:"resident_model"`
-	IdleCooldown          string `yaml:"idle_cooldown"`
-	MaxLoadedModels       int    `yaml:"max_loaded_models"`
-	UseCurrentOrBetter    bool   `yaml:"use_current_or_better"`
-	UnavailableTierPolicy string `yaml:"unavailable_tier_policy"`
+	ResidentModel   string `yaml:"resident_model"`
+	IdleCooldown    string `yaml:"idle_cooldown"`
+	MaxLoadedModels int    `yaml:"max_loaded_models"`
 }
 
 type generatedUpdates struct {
@@ -74,22 +72,20 @@ func Generate(options Options) ([]byte, error) {
 	if options.ResidentID == "" {
 		options.ResidentID = variants[0].ID
 	}
-	configured := make(map[string]config.LocalModelConfig, len(variants))
-	roles := make(map[string]string, len(variants))
+	configured := make(map[string]config.ModelConfig, len(variants))
+	groups := make(map[string]config.GroupConfig)
+	routes := make(map[string]string, len(variants))
 	residentFound := false
 	for _, variant := range variants {
-		role := variant.ModelType + "." + variant.Level
-		if existing, exists := roles[role]; exists {
-			return nil, fmt.Errorf("variants %q and %q both occupy %s", existing, variant.ID, role)
+		route := variant.ModelType + "/" + variant.Level
+		if existing, exists := routes[route]; exists {
+			return nil, fmt.Errorf("variants %q and %q both map to generated route %s", existing, variant.ID, route)
 		}
-		roles[role] = variant.ID
+		routes[route] = variant.ID
 		resident := variant.ID == options.ResidentID
 		residentFound = residentFound || resident
-		configured[variant.ID] = config.LocalModelConfig{
+		configured[variant.ID] = config.ModelConfig{
 			CatalogID: variant.ID,
-			ModelType: variant.ModelType,
-			Tier:      variant.Level,
-			Resident:  resident,
 			ModelPath: filepath.Join(options.Paths.ModelDir, variant.ID, "current", "model.gguf"),
 			Backend: config.LocalBackendConfig{
 				Type:      "process",
@@ -102,6 +98,15 @@ func Generate(options Options) ([]byte, error) {
 				GPULayers:     options.GPULayers,
 			},
 		}
+		group := groups[variant.ModelType]
+		if group.Profiles == nil {
+			group.Profiles = make(map[string]config.ProfileConfig)
+		}
+		group.Profiles[variant.Level] = config.ProfileConfig{Model: variant.ID}
+		if group.DefaultProfile == "" || resident {
+			group.DefaultProfile = variant.Level
+		}
+		groups[variant.ModelType] = group
 	}
 	if !residentFound {
 		return nil, fmt.Errorf("resident variant %q was not selected", options.ResidentID)
@@ -122,11 +127,7 @@ func Generate(options Options) ([]byte, error) {
 		},
 		Queue: generatedQueue{Policy: "fifo", MaxDepth: 128, DefaultTimeout: "2m"},
 		ModelLifecycle: generatedLifecycle{
-			ResidentModel:         options.ResidentID,
-			IdleCooldown:          "15m",
-			MaxLoadedModels:       1,
-			UseCurrentOrBetter:    true,
-			UnavailableTierPolicy: "use_available",
+			ResidentModel: options.ResidentID, IdleCooldown: "15m", MaxLoadedModels: 1,
 		},
 		Paths: config.PathsConfig{
 			StateDir:   options.Paths.StateDir,
@@ -134,13 +135,22 @@ func Generate(options Options) ([]byte, error) {
 			RuntimeDir: options.Paths.RuntimeDir,
 			LogDir:     options.Paths.LogDir,
 		},
-		Updates:     generatedUpdates{CheckInterval: "24h", DefaultPolicy: "notify"},
-		LocalModels: configured,
+		Updates: generatedUpdates{CheckInterval: "24h", DefaultPolicy: "notify"},
+		Models:  configured,
 		Routing: config.RoutingConfig{
-			DefaultProvider:               "local",
-			AllowAutoRemote:               false,
-			RequireExplicitRemoteProvider: true,
+			Default:                  config.RouteReference{},
+			UnavailableProfilePolicy: "reject",
+			UnavailableModelPolicy:   "use_fallback",
+			Groups:                   groups,
+			DefaultProvider:          "local",
 		},
+	}
+	for groupName, group := range groups {
+		for profileName, profile := range group.Profiles {
+			if profile.Model == options.ResidentID {
+				generated.Routing.Default = config.RouteReference{Group: groupName, Profile: profileName}
+			}
+		}
 	}
 	data, err := yaml.Marshal(generated)
 	if err != nil {

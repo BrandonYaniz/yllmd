@@ -7,14 +7,16 @@ import (
 )
 
 type GenerateRequest struct {
-	ID        string
-	Provider  string
-	Model     string
-	ModelType string
-	Level     string
-	Stream    bool
-	Input     protocol.Input
-	Settings  protocol.GenerationSettings
+	ID             string
+	Provider       string
+	Model          string
+	Target         *protocol.ModelTarget
+	Fallback       bool
+	FallbackFrom   string
+	FallbackModels []string
+	Stream         bool
+	Input          protocol.Input
+	Settings       protocol.GenerationSettings
 }
 
 type Provider interface {

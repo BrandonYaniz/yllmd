@@ -35,3 +35,20 @@ func TestFakeProviderGenerateCompact(t *testing.T) {
 		t.Fatal("expected completed event")
 	}
 }
+
+func TestFakeProviderStartedIncludesResolvedTargetAndFallback(t *testing.T) {
+	p := NewFakeProvider("fast")
+	target := &protocol.ModelTarget{Group: "writing", Profile: "draft-pass1"}
+	events, err := p.Generate(context.Background(), providers.GenerateRequest{
+		ID: "req-route", Model: "review", Target: target, Fallback: true, FallbackFrom: "primary",
+		Input: protocol.Input{Kind: "prompt", Prompt: "hello"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := <-events
+	if started.Type != "started" || started.Target == nil || *started.Target != *target ||
+		started.Model != "review" || !started.Fallback || started.FallbackFrom != "primary" {
+		t.Fatalf("started = %#v", started)
+	}
+}

@@ -12,85 +12,114 @@ func TestLoadExampleConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if cfg.Server.SocketPath == "" {
-		t.Fatal("expected socket path")
+	if cfg.Routing.Default.Group != "llm" || cfg.Routing.Default.Profile != "balanced" {
+		t.Fatalf("unexpected config: %#v", cfg)
 	}
-	if cfg.Queue.DefaultTimeout == 0 {
-		t.Fatal("expected parsed queue timeout")
-	}
-	if cfg.ModelLifecycle.IdleCooldown == 0 {
-		t.Fatal("expected parsed idle cooldown")
-	}
-	if cfg.Routing.DefaultProvider != "local" {
-		t.Fatalf("expected local default provider, got %q", cfg.Routing.DefaultProvider)
+	if len(cfg.Models) != 3 || len(cfg.Routing.Groups) != 2 {
+		t.Fatalf("models/groups = %d/%d", len(cfg.Models), len(cfg.Routing.Groups))
 	}
 }
 
-func TestRejectsRemoteDefaultProviderForV1(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := readExampleConfig(t)
-	data = []byte(strings.ReplaceAll(string(data), "default_provider: local", "default_provider: openai"))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+func TestValidDynamicRouting(t *testing.T) {
+	cfg := exampleConfig(t)
+	cfg.Routing.Groups["writing"] = GroupConfig{
+		DefaultProfile: "structure.v2",
+		Profiles: map[string]ProfileConfig{
+			"structure.v2": {Model: "general-balanced"},
+			"draft-pass1":  {Model: "general-balanced"},
+			"draft-pass2":  {Model: "general-balanced", Fallbacks: []string{"general-fast"}},
+		},
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected remote default provider to be rejected")
-	}
-}
-
-func TestRejectsUnknownFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := readExampleConfig(t)
-	data = []byte(strings.Replace(string(data), "transport: stdio", "transport: stdio\n      url: http://127.0.0.1:8080", 1))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected unknown backend field to be rejected")
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestRejectsUnsupportedUpdatePolicy(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := readExampleConfig(t)
-	data = []byte(strings.ReplaceAll(string(data), "default_policy: notify", "default_policy: sometimes"))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+func TestConfigurationValidationFailures(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*Config)
+		contains string
+	}{
+		{"missing default group", func(c *Config) { c.Routing.Default.Group = "missing" }, "default group"},
+		{"missing default profile", func(c *Config) { c.Routing.Default.Profile = "missing" }, "default profile"},
+		{"missing group default", func(c *Config) {
+			g := c.Routing.Groups["llm"]
+			g.DefaultProfile = "missing"
+			c.Routing.Groups["llm"] = g
+		}, "default profile"},
+		{"unknown primary", func(c *Config) {
+			g := c.Routing.Groups["llm"]
+			g.Profiles["fast"] = ProfileConfig{Model: "missing"}
+			c.Routing.Groups["llm"] = g
+		}, "unknown model"},
+		{"unknown fallback", func(c *Config) {
+			g := c.Routing.Groups["llm"]
+			p := g.Profiles["fast"]
+			p.Fallbacks = []string{"missing"}
+			g.Profiles["fast"] = p
+			c.Routing.Groups["llm"] = g
+		}, "fallback"},
+		{"duplicate fallback", func(c *Config) {
+			g := c.Routing.Groups["llm"]
+			p := g.Profiles["deep"]
+			p.Fallbacks = []string{"general-fast", "general-fast"}
+			g.Profiles["deep"] = p
+			c.Routing.Groups["llm"] = g
+		}, "repeats fallback"},
+		{"primary fallback", func(c *Config) {
+			g := c.Routing.Groups["llm"]
+			p := g.Profiles["fast"]
+			p.Fallbacks = []string{"general-fast"}
+			g.Profiles["fast"] = p
+			c.Routing.Groups["llm"] = g
+		}, "repeats primary"},
+		{"invalid identifier", func(c *Config) { c.Models["Not Valid"] = c.Models["general-fast"] }, "valid identifier"},
+		{"unknown resident", func(c *Config) { c.ModelLifecycle.ResidentModel = "missing" }, "resident model"},
+		{"alias collision", func(c *Config) {
+			m := c.Models["general-fast"]
+			m.Aliases = []string{"general"}
+			c.Models["general-fast"] = m
+		}, "identifier"},
+		{"empty profiles", func(c *Config) { c.Routing.Groups["empty"] = GroupConfig{} }, "at least one profile"},
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected unsupported update policy to be rejected")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := exampleConfig(t)
+			test.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("error = %v, want substring %q", err, test.contains)
+			}
+		})
 	}
 }
 
-func TestRejectsUnsupportedModelType(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := readExampleConfig(t)
-	data = []byte(strings.Replace(string(data), "model_type: llm", "model_type: image", 1))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+func TestRejectsOldAndUnknownFields(t *testing.T) {
+	if _, err := Parse([]byte("local_models:\n  fast: {}\n")); err == nil {
+		t.Fatal("expected old local_models field to be rejected")
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected unsupported model type to be rejected")
+	data := readExampleConfig(t)
+	data = []byte(strings.Replace(string(data), "transport: stdio}", "transport: stdio, url: nope}", 1))
+	if _, err := Parse(data); err == nil {
+		t.Fatal("expected unknown field error")
 	}
 }
 
-func TestRejectsInvalidGPULayers(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := readExampleConfig(t)
-	data = []byte(strings.Replace(string(data), "gpu_layers: 0", "gpu_layers: -2", 1))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+func exampleConfig(t *testing.T) Config {
+	t.Helper()
+	cfg, err := Parse(readExampleConfig(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected invalid gpu_layers to be rejected")
-	}
+	return cfg
 }
 
 func readExampleConfig(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
 	if err != nil {
-		t.Fatalf("read example config: %v", err)
+		t.Fatal(err)
 	}
 	return data
 }

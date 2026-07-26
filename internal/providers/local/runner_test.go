@@ -24,9 +24,8 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 		ModelLifecycle: config.ModelLifecycleConfig{
 			ResidentModel: "fast",
 		},
-		LocalModels: map[string]config.LocalModelConfig{
+		Models: map[string]config.ModelConfig{
 			"fast": {
-				Tier:      "fast",
 				ModelPath: filepath.Join(t.TempDir(), "model.gguf"),
 				Backend: config.LocalBackendConfig{
 					Type:      "process",
@@ -101,7 +100,7 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesQwenChatTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen25-coder-1.5b-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "qwen25-coder-1.5b-instruct"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "Write hello world."},
@@ -116,7 +115,7 @@ func TestRunnerPromptAppliesQwenChatTemplate(t *testing.T) {
 }
 
 func TestRunnerPromptLeavesDirectPromptUnchanged(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen25-coder-1.5b-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "qwen25-coder-1.5b-instruct"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "prompt", Prompt: "raw prompt"})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +126,7 @@ func TestRunnerPromptLeavesDirectPromptUnchanged(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesPhi4ChatTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "phi4-mini-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "phi4-mini-instruct"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "Hello."},
@@ -142,7 +141,7 @@ func TestRunnerPromptAppliesPhi4ChatTemplate(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesGemma3ChatTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "gemma3-1b-it"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "gemma3-1b-it"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "First question."},
@@ -161,7 +160,7 @@ func TestRunnerPromptAppliesGemma3ChatTemplate(t *testing.T) {
 }
 
 func TestRunnerPromptRejectsInvalidGemma3RoleOrder(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "gemma3-1b-it"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "gemma3-1b-it"}}
 	_, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "assistant", Content: "Wrong first role."},
 	}})
@@ -171,7 +170,7 @@ func TestRunnerPromptRejectsInvalidGemma3RoleOrder(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesLlama3InstructTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "llama32-1b-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "llama32-1b-instruct"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "Hello."},
@@ -188,7 +187,7 @@ func TestRunnerPromptAppliesLlama3InstructTemplate(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesGranite3ChatTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "granite3.3-2b-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "granite3.3-2b-instruct"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "Hello."},
@@ -219,7 +218,7 @@ func TestGranite3ChatPromptAddsDefaultSystemMessage(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesMistralNemoTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "mistral-nemo-12b-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "mistral-nemo-12b-instruct"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "First question."},
@@ -237,7 +236,7 @@ func TestRunnerPromptAppliesMistralNemoTemplate(t *testing.T) {
 }
 
 func TestRunnerPromptRejectsInvalidMistralNemoRoleOrder(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "mistral-nemo-12b-instruct"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "mistral-nemo-12b-instruct"}}
 	_, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "assistant", Content: "Wrong first role."},
 	}})
@@ -247,7 +246,7 @@ func TestRunnerPromptRejectsInvalidMistralNemoRoleOrder(t *testing.T) {
 }
 
 func TestRunnerPromptAppliesQwen3NonThinkingTemplate(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen3-1.7b"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "qwen3-1.7b"}}
 	prompt, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "First question."},
@@ -268,7 +267,7 @@ func TestRunnerPromptAppliesQwen3NonThinkingTemplate(t *testing.T) {
 }
 
 func TestRunnerPromptRejectsInvalidQwen3RoleOrder(t *testing.T) {
-	model := models.LocalModel{Config: config.LocalModelConfig{CatalogID: "qwen3-1.7b"}}
+	model := models.LocalModel{Config: config.ModelConfig{CatalogID: "qwen3-1.7b"}}
 	_, err := runnerPrompt(model, protocol.Input{Kind: "messages", Messages: []protocol.Message{
 		{Role: "assistant", Content: "Wrong first role."},
 	}})
@@ -301,14 +300,40 @@ func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	}
 }
 
+func TestRunnerProviderFallsBackOnlyWhenPrimaryCannotStart(t *testing.T) {
+	runnerPath := writeFakeRunner(t)
+	cfg := runnerTestConfig(t, runnerPath)
+	primary := cfg.Models["fast"]
+	primary.Backend.Command = filepath.Join(t.TempDir(), "missing-runner")
+	cfg.Models["primary"] = primary
+	provider := NewRunnerProvider(cfg, nil)
+	defer closeProvider(t, provider)
+	target := &protocol.ModelTarget{Group: "writing", Profile: "draft"}
+	events, err := provider.Generate(context.Background(), providers.GenerateRequest{
+		ID: "fallback-1", Model: "primary", FallbackModels: []string{"fast"}, Target: target,
+		Input: protocol.Input{Kind: "prompt", Prompt: "hello"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started protocol.Event
+	for event := range events {
+		if event.Type == "started" {
+			started = event
+		}
+	}
+	if started.Model != "fast" || !started.Fallback || started.FallbackFrom != "primary" || started.Target == nil || *started.Target != *target {
+		t.Fatalf("started = %#v", started)
+	}
+}
+
 func TestRunnerProviderCooldownReloadsResidentModel(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runner.log")
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
 	runnerPath := writeFakeRunner(t)
 	cfg := runnerTestConfig(t, runnerPath)
 	cfg.ModelLifecycle.IdleCooldown = 25 * time.Millisecond
-	cfg.LocalModels["deep"] = config.LocalModelConfig{
-		Tier:      "deep",
+	cfg.Models["deep"] = config.ModelConfig{
 		ModelPath: filepath.Join(t.TempDir(), "deep.gguf"),
 		Backend: config.LocalBackendConfig{
 			Type:      "process",
@@ -382,9 +407,9 @@ func TestRunnerProviderUsesFormattedTokenizationForCatalogTemplate(t *testing.T)
 	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
 	runnerPath := writeFakeRunner(t)
 	cfg := runnerTestConfig(t, runnerPath)
-	model := cfg.LocalModels["fast"]
+	model := cfg.Models["fast"]
 	model.CatalogID = "qwen25-coder-1.5b-instruct"
-	cfg.LocalModels["fast"] = model
+	cfg.Models["fast"] = model
 	provider := NewRunnerProvider(cfg, nil)
 	defer closeProvider(t, provider)
 
@@ -700,9 +725,8 @@ func runnerTestConfig(t *testing.T, runnerPath string) config.Config {
 			ResidentModel: "fast",
 			IdleCooldown:  time.Hour,
 		},
-		LocalModels: map[string]config.LocalModelConfig{
+		Models: map[string]config.ModelConfig{
 			"fast": {
-				Tier:      "fast",
 				ModelPath: filepath.Join(t.TempDir(), "model.gguf"),
 				Backend: config.LocalBackendConfig{
 					Type:      "process",

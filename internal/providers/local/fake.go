@@ -42,7 +42,7 @@ func (p *FakeProvider) Generate(ctx context.Context, request providers.GenerateR
 		if model == "" {
 			model = p.model
 		}
-		if !send(protocol.Event{Type: "started", ID: request.ID, Provider: "local", Model: model}) {
+		if !send(protocol.Event{Type: "started", ID: request.ID, Provider: "local", Target: request.Target, Model: model, Fallback: request.Fallback, FallbackFrom: request.FallbackFrom}) {
 			return
 		}
 		text := fakeText(request.Input)

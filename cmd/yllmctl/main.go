@@ -94,6 +94,10 @@ func runConfig(mode locations.Mode, paths locations.Paths, args []string) {
 		usage()
 		os.Exit(2)
 	}
+	runConfigCreate(mode, paths, args[1:])
+}
+
+func runConfigCreate(mode locations.Mode, paths locations.Paths, args []string) {
 	flags := flag.NewFlagSet("config create", flag.ExitOnError)
 	var variantIDs repeatedStrings
 	flags.Var(&variantIDs, "variant", "catalog variant ID to assign (repeatable)")
@@ -107,7 +111,7 @@ func runConfig(mode locations.Mode, paths locations.Paths, args []string) {
 	gpuLayers := flags.Int("gpu-layers", gpuLayersDefault, "runner GPU layers (-1 automatic, 0 CPU-only)")
 	output := flags.String("output", paths.ConfigFile, "configuration output path")
 	force := flags.Bool("force", false, "replace an existing configuration")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		fatal(err)
 	}
 	if len(flags.Args()) != 0 || len(variantIDs) == 0 {
@@ -234,6 +238,10 @@ func runModels(socketPath, modelDir string, args []string) {
 		runSingle(socketPath, protocol.MessageModels)
 		return
 	}
+	if len(args) == 1 && args[0] == "routes" {
+		runModelsRoutes(socketPath)
+		return
+	}
 	if len(args) >= 1 && args[0] == "install" {
 		runModelsInstall(socketPath, args[1:])
 		return
@@ -264,6 +272,22 @@ func runModels(socketPath, modelDir string, args []string) {
 	}
 	usage()
 	os.Exit(2)
+}
+
+func runModelsRoutes(socketPath string) {
+	client, err := ipc.Dial(socketPath, 2*time.Second)
+	if err != nil {
+		fatal(err)
+	}
+	defer client.Close()
+	if err := client.Send(protocol.Request{Type: protocol.MessageModels, ID: requestID(protocol.MessageModels), Action: "routes"}); err != nil {
+		fatal(err)
+	}
+	event, err := client.ReadEvent()
+	if err != nil {
+		fatal(err)
+	}
+	printJSON(event)
 }
 
 func runModelsInstalled(socketPath string) {
@@ -1117,9 +1141,9 @@ func runCancel(socketPath string, args []string) {
 
 func runGenerate(socketPath string, args []string) {
 	generateFlags := flag.NewFlagSet("generate", flag.ExitOnError)
-	model := generateFlags.String("model", "", "model name, tier, or alias")
-	modelType := generateFlags.String("model-type", "", "model type: llm or code")
-	level := generateFlags.String("level", "", "model level: fast, balanced, or deep")
+	model := generateFlags.String("model", "", "exact configured model name or alias")
+	group := generateFlags.String("group", "", "routing group")
+	profile := generateFlags.String("profile", "", "routing profile")
 	prompt := generateFlags.String("prompt", "", "prompt text")
 	stream := generateFlags.Bool("stream", true, "stream text deltas")
 	output := generateFlags.String("output", "json", "output format: json or text")
@@ -1147,6 +1171,10 @@ func runGenerate(socketPath string, args []string) {
 	if *prompt == "" {
 		fatal(fmt.Errorf("generate requires -prompt or a prompt argument"))
 	}
+	target, err := generationTarget(*model, *group, *profile)
+	if err != nil {
+		fatal(err)
+	}
 
 	client, err := ipc.Dial(socketPath, 2*time.Second)
 	if err != nil {
@@ -1156,13 +1184,10 @@ func runGenerate(socketPath string, args []string) {
 
 	id := requestID(protocol.MessageGenerate)
 	request := protocol.Request{
-		Type:      protocol.MessageGenerate,
-		ID:        id,
-		Provider:  "local",
-		Model:     *model,
-		ModelType: *modelType,
-		Level:     *level,
-		Stream:    stream,
+		Type:     protocol.MessageGenerate,
+		ID:       id,
+		Provider: "local",
+		Stream:   stream,
 		Input: &protocol.Input{
 			Kind:   "prompt",
 			Prompt: *prompt,
@@ -1177,6 +1202,7 @@ func runGenerate(socketPath string, args []string) {
 			},
 		},
 	}
+	request.Target = target
 	if err := client.Send(request); err != nil {
 		fatal(err)
 	}
@@ -1201,6 +1227,24 @@ func runGenerate(socketPath string, args []string) {
 			}
 			return
 		}
+	}
+}
+
+func generationTarget(model, group, profile string) (*protocol.ModelTarget, error) {
+	hasNewRoute := group != "" || profile != ""
+	if profile != "" && group == "" {
+		return nil, errors.New("--profile requires --group")
+	}
+	if model != "" && hasNewRoute {
+		return nil, errors.New("--model cannot be combined with routing flags")
+	}
+	switch {
+	case model != "":
+		return &protocol.ModelTarget{Model: model}, nil
+	case hasNewRoute:
+		return &protocol.ModelTarget{Group: group, Profile: profile}, nil
+	default:
+		return nil, nil
 	}
 }
 
@@ -1243,7 +1287,7 @@ func requestID(kind protocol.MessageType) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models choose|models licenses|models installed|models updates|models list|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models update -all [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
+	fmt.Fprintf(os.Stderr, "usage: yllmctl [-mode user|daemon] [-socket path] <config create -variant id [-variant id]|health|status|providers|models families|models variants family|models choose|models licenses|models installed|models updates|models list|models routes|models versions model|models install variant|models install family -variant id [-variant id]|models install family -all|models install model -file path -version id -sha256 hash|models update variant [-activate]|models update -all [-activate]|models activate model -version id|models rollback model|models delete model [-version id] [-yes]|cancel id|generate>\n")
 }
 
 func fatal(err error) {

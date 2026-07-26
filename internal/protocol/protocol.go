@@ -28,9 +28,8 @@ type Request struct {
 	ID              string             `json:"id"`
 	Action          string             `json:"action,omitempty"`
 	Provider        string             `json:"provider,omitempty"`
+	Target          *ModelTarget       `json:"target,omitempty"`
 	Model           string             `json:"model,omitempty"`
-	ModelType       string             `json:"model_type,omitempty"`
-	Level           string             `json:"level,omitempty"`
 	Version         string             `json:"version,omitempty"`
 	File            string             `json:"file,omitempty"`
 	SHA256          string             `json:"sha256,omitempty"`
@@ -41,6 +40,30 @@ type Request struct {
 	Input           *Input             `json:"input,omitempty"`
 	Settings        GenerationSettings `json:"settings,omitempty"`
 	Queue           QueueOptions       `json:"queue,omitempty"`
+}
+
+type ModelTarget struct {
+	Model   string `json:"model,omitempty"`
+	Group   string `json:"group,omitempty"`
+	Profile string `json:"profile,omitempty"`
+}
+
+// NormalizedTarget validates and returns the request target.
+func (r Request) NormalizedTarget() (ModelTarget, error) {
+	if r.Model != "" {
+		return ModelTarget{}, fmt.Errorf("generate requests must use target.model instead of top-level model")
+	}
+	var target ModelTarget
+	if r.Target != nil {
+		target = *r.Target
+	}
+	if target.Model != "" && (target.Group != "" || target.Profile != "") {
+		return ModelTarget{}, fmt.Errorf("target.model cannot be combined with target.group or target.profile")
+	}
+	if target.Profile != "" && target.Group == "" {
+		return ModelTarget{}, fmt.Errorf("target.profile requires target.group")
+	}
+	return target, nil
 }
 
 type Input struct {
@@ -84,10 +107,15 @@ type Event struct {
 	QueuePosition    int               `json:"queue_position,omitempty"`
 	Provider         string            `json:"provider,omitempty"`
 	Model            string            `json:"model,omitempty"`
+	Target           *ModelTarget      `json:"target,omitempty"`
+	Fallback         bool              `json:"fallback,omitempty"`
+	FallbackFrom     string            `json:"fallback_from,omitempty"`
 	Version          string            `json:"version,omitempty"`
 	Versions         []ModelVersion    `json:"versions,omitempty"`
 	Path             string            `json:"path,omitempty"`
 	Models           []ModelDescriptor `json:"models,omitempty"`
+	Groups           []RoutingGroup    `json:"groups,omitempty"`
+	DefaultTarget    *ModelTarget      `json:"default_target,omitempty"`
 	Text             string            `json:"text,omitempty"`
 	FinishReason     string            `json:"finish_reason,omitempty"`
 	Usage            *Usage            `json:"usage,omitempty"`
@@ -221,12 +249,34 @@ type ModelDescriptor struct {
 	ID               ModelID           `json:"id"`
 	Name             string            `json:"name"`
 	DisplayName      string            `json:"display_name"`
-	ModelType        string            `json:"model_type"`
-	Level            string            `json:"level"`
-	Tier             string            `json:"tier"`
+	CatalogID        string            `json:"catalog_id,omitempty"`
+	Aliases          []string          `json:"aliases,omitempty"`
+	Enabled          bool              `json:"enabled"`
+	Installed        bool              `json:"installed"`
+	ActiveVersion    string            `json:"active_version,omitempty"`
+	Loaded           bool              `json:"loaded"`
 	Resident         bool              `json:"resident"`
+	Runtime          ModelRuntime      `json:"runtime"`
 	Capabilities     ModelCapabilities `json:"capabilities"`
 	ProviderMetadata map[string]string `json:"provider_metadata,omitempty"`
+}
+
+type ModelRuntime struct {
+	ContextTokens int `json:"context_tokens"`
+	Threads       int `json:"threads"`
+	GPULayers     int `json:"gpu_layers"`
+}
+
+type RoutingGroup struct {
+	Name           string           `json:"name"`
+	DefaultProfile string           `json:"default_profile,omitempty"`
+	Profiles       []RoutingProfile `json:"profiles"`
+}
+
+type RoutingProfile struct {
+	Name      string   `json:"name"`
+	Model     string   `json:"model"`
+	Fallbacks []string `json:"fallbacks"`
 }
 
 type ModelVersion struct {
@@ -278,6 +328,18 @@ func DecodeRequest(line []byte) (Request, error) {
 	if req.ID == "" {
 		return Request{}, fmt.Errorf("request id is required")
 	}
+	if req.Type == MessageGenerate {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(line, &fields); err != nil {
+			return Request{}, err
+		}
+		if _, exists := fields["model_type"]; exists {
+			return Request{}, fmt.Errorf("generate requests must use target.group instead of model_type")
+		}
+		if _, exists := fields["level"]; exists {
+			return Request{}, fmt.Errorf("generate requests must use target.profile instead of level")
+		}
+	}
 	return req, nil
 }
 
@@ -287,6 +349,9 @@ func (r Request) ValidateGenerate() error {
 	}
 	if r.Input == nil {
 		return fmt.Errorf("generate request requires input")
+	}
+	if _, err := r.NormalizedTarget(); err != nil {
+		return err
 	}
 	switch r.Input.Kind {
 	case "prompt":
@@ -367,11 +432,6 @@ func (r Request) ValidateGenerate() error {
 	case "", "json", "text", "raw":
 	default:
 		return fmt.Errorf("output_format %q is not supported", r.OutputFormat)
-	}
-	switch r.ModelType {
-	case "", "llm", "code":
-	default:
-		return fmt.Errorf("model_type %q is not supported", r.ModelType)
 	}
 	return nil
 }

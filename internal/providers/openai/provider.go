@@ -13,5 +13,5 @@ func (p *Provider) ID() string {
 }
 
 func ErrNotImplemented() error {
-	return fmt.Errorf("openai provider is skeletoned but not implemented in v1")
+	return fmt.Errorf("openai provider is skeletoned but not implemented")
 }

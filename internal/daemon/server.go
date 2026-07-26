@@ -49,10 +49,11 @@ type artifactDownloader interface {
 }
 
 type generateJob struct {
-	request protocol.Request
-	client  *clientConn
-	ctx     context.Context
-	cancel  context.CancelFunc
+	request  protocol.Request
+	resolved models.ResolvedTarget
+	client   *clientConn
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 type clientConn struct {
@@ -188,7 +189,11 @@ func (s *Server) handleRequest(client *clientConn, req protocol.Request) {
 func (s *Server) handleModels(client *clientConn, req protocol.Request) {
 	switch req.Action {
 	case "", "list":
-		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors()})
+		defaultTarget := s.defaultTarget()
+		_ = client.write(protocol.Event{Type: "models", ID: req.ID, Models: s.modelDescriptors(), Groups: s.models.Groups(), DefaultTarget: &defaultTarget})
+	case "routes":
+		defaultTarget := s.defaultTarget()
+		_ = client.write(protocol.Event{Type: "routes", ID: req.ID, Groups: s.models.Groups(), DefaultTarget: &defaultTarget})
 	case "installed":
 		s.listInstalledModels(client, req)
 	case "licenses":
@@ -558,24 +563,31 @@ func (s *Server) enqueueGenerate(client *clientConn, req protocol.Request) {
 		return
 	}
 	if req.Provider == "" || req.Provider == "auto" {
-		req.Provider = s.cfg.Routing.DefaultProvider
+		req.Provider = s.defaultProvider()
 	}
 	if req.Provider != "local" {
-		writeGenerateError(client, req, "provider_not_implemented", "remote providers are skeletoned but not implemented in v1")
+		writeGenerateError(client, req, "provider_not_implemented", "remote providers are skeletoned but not implemented")
 		return
 	}
-	if req.Model == "" && req.Level == "" {
-		req.Model = s.cfg.ModelLifecycle.ResidentModel
+	target, err := req.NormalizedTarget()
+	if err != nil {
+		writeGenerateError(client, req, "invalid_request", err.Error())
+		return
 	}
-	model, err := s.models.ResolveRequest(req.Model, req.ModelType, req.Level)
+	resolved, err := s.models.ResolveTarget(target)
 	if err != nil {
 		writeGenerateError(client, req, "model_unavailable", err.Error())
 		return
 	}
-	req.Model = model.Name
+	req.Model = resolved.ResolvedModel
+	if resolved.ResolvedGroup != "" {
+		req.Target = &protocol.ModelTarget{Group: resolved.ResolvedGroup, Profile: resolved.ResolvedProfile}
+	} else {
+		req.Target = &protocol.ModelTarget{Model: resolved.ResolvedModel}
+	}
 	timeout := s.requestTimeout(req)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	job := &generateJob{request: req, client: client, ctx: ctx, cancel: cancel}
+	job := &generateJob{request: req, resolved: resolved, client: client, ctx: ctx, cancel: cancel}
 
 	s.mu.Lock()
 	if s.shutdown {
@@ -643,14 +655,10 @@ func writeGenerateError(client *clientConn, req protocol.Request, code, message 
 func (s *Server) runJob(job *generateJob) {
 	stream := outputDelivery(job.request) == "stream"
 	events, err := s.provider.Generate(job.ctx, providers.GenerateRequest{
-		ID:        job.request.ID,
-		Provider:  "local",
-		Model:     job.request.Model,
-		ModelType: job.request.ModelType,
-		Level:     job.request.Level,
-		Stream:    stream,
-		Input:     *job.request.Input,
-		Settings:  job.request.Settings,
+		ID: job.request.ID, Provider: "local", Model: job.request.Model,
+		Target: job.request.Target, Fallback: job.resolved.UsedFallback, FallbackFrom: job.resolved.FallbackFrom,
+		FallbackModels: job.resolved.FallbackModels,
+		Stream:         stream, Input: *job.request.Input, Settings: job.request.Settings,
 	})
 	if err != nil {
 		if outputFormat(job.request) == "text" {
@@ -812,7 +820,7 @@ func (s *Server) loadedModel() string {
 func (s *Server) daemonStatus() protocol.DaemonStatus {
 	return protocol.DaemonStatus{
 		Status:        "ok",
-		Provider:      s.cfg.Routing.DefaultProvider,
+		Provider:      s.defaultProvider(),
 		LoadedModel:   s.loadedModel(),
 		QueueDepth:    s.queueDepth(),
 		ModelCount:    len(s.models.Descriptors()),
@@ -820,14 +828,38 @@ func (s *Server) daemonStatus() protocol.DaemonStatus {
 	}
 }
 
+func (s *Server) defaultProvider() string {
+	if s.cfg.Routing.DefaultProvider == "" {
+		return "local"
+	}
+	return s.cfg.Routing.DefaultProvider
+}
+
+func (s *Server) defaultTarget() protocol.ModelTarget {
+	target := protocol.ModelTarget{Group: s.cfg.Routing.Default.Group, Profile: s.cfg.Routing.Default.Profile}
+	if target.Profile == "" {
+		if group, ok := s.cfg.Routing.Groups[target.Group]; ok {
+			target.Profile = group.DefaultProfile
+		}
+	}
+	return target
+}
+
 func (s *Server) modelDescriptors() []protocol.ModelDescriptor {
 	descriptors := s.models.Descriptors()
 	store := storage.NewModelStore(s.cfg)
+	loaded := s.loadedModel()
 	for i := range descriptors {
+		descriptors[i].Loaded = descriptors[i].Name == loaded
 		activeVersion, err := store.ActiveVersion(descriptors[i].Name)
 		if err != nil {
+			if _, statErr := os.Stat(descriptors[i].ProviderMetadata["model_path"]); statErr == nil {
+				descriptors[i].Installed = true
+			}
 			continue
 		}
+		descriptors[i].Installed = true
+		descriptors[i].ActiveVersion = activeVersion
 		if descriptors[i].ProviderMetadata == nil {
 			descriptors[i].ProviderMetadata = make(map[string]string)
 		}

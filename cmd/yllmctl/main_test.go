@@ -160,3 +160,32 @@ func TestPendingCatalogUpdatePlansActivateOnlyConfiguredModels(t *testing.T) {
 		t.Fatalf("activated plans = %#v", plans)
 	}
 }
+
+func TestGenerationTargetFlags(t *testing.T) {
+	tests := []struct {
+		name                  string
+		model, group, profile string
+		want                  *protocol.ModelTarget
+		wantError             bool
+	}{
+		{"exact", "fiction-primary", "", "", &protocol.ModelTarget{Model: "fiction-primary"}, false},
+		{"route", "", "writing", "draft-pass1", &protocol.ModelTarget{Group: "writing", Profile: "draft-pass1"}, false},
+		{"group", "", "writing", "", &protocol.ModelTarget{Group: "writing"}, false},
+		{"profile only", "", "", "draft", nil, true},
+		{"mixed exact route", "one", "writing", "", nil, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target, err := generationTarget(test.model, test.group, test.profile)
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v", err)
+			}
+			if target == nil != (test.want == nil) {
+				t.Fatalf("target = %#v", target)
+			}
+			if target != nil && *target != *test.want {
+				t.Fatalf("target = %#v, want %#v", target, test.want)
+			}
+		})
+	}
+}

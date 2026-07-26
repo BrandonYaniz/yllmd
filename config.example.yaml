@@ -2,86 +2,55 @@ server:
   socket_path: /var/run/yllmd/yllmd.sock
   socket_mode: "0660"
   socket_group: yllm
-
 queue:
   policy: fifo
   max_depth: 128
   default_timeout: 2m
-
 model_lifecycle:
-  resident_model: fast
+  resident_model: general-fast
   idle_cooldown: 15m
   max_loaded_models: 1
-  use_current_or_better: true
-  unavailable_tier_policy: use_available
-
 paths:
   state_dir: /var/lib/yllmd
   model_dir: /var/lib/yllmd/models
   runtime_dir: /var/run/yllmd
   log_dir: /var/log/yllmd
-
 updates:
   check_interval: 24h
   default_policy: notify
-
-local_models:
-  fast:
+models:
+  general-fast:
     catalog_id: qwen2_5_1_5b_instruct_q4
-    model_type: llm
-    tier: fast
-    resident: true
-    backend:
-      type: process
-      command: /usr/local/libexec/yllama-runner
-      transport: stdio
-    runtime:
-      context_tokens: 8192
-      threads: 4
-      gpu_layers: 0
-
-  balanced:
+    backend: {type: process, command: /usr/local/libexec/yllama-runner, transport: stdio}
+    runtime: {context_tokens: 8192, threads: 4, gpu_layers: 0}
+  general-balanced:
     catalog_id: qwen2_5_7b_instruct_q4
-    model_type: llm
-    tier: balanced
-    resident: false
-    backend:
-      type: process
-      command: /usr/local/libexec/yllama-runner
-      transport: stdio
-    runtime:
-      context_tokens: 16384
-      threads: 8
-      gpu_layers: 0
-
-  deep:
+    aliases: [general]
+    backend: {type: process, command: /usr/local/libexec/yllama-runner, transport: stdio}
+    runtime: {context_tokens: 16384, threads: 8, gpu_layers: 0}
+  general-deep:
     catalog_id: qwen2_5_14b_instruct_q4
-    model_type: llm
-    tier: deep
-    resident: false
-    backend:
-      type: process
-      command: /usr/local/libexec/yllama-runner
-      transport: stdio
-    runtime:
-      context_tokens: 32768
-      threads: 12
-      gpu_layers: 0
-
+    backend: {type: process, command: /usr/local/libexec/yllama-runner, transport: stdio}
+    runtime: {context_tokens: 32768, threads: 12, gpu_layers: 0}
 remote_providers:
-  openai:
-    enabled: false
-    api_key_env: OPENAI_API_KEY
-
-  gemini:
-    enabled: false
-    api_key_env: GEMINI_API_KEY
-
-  anthropic:
-    enabled: false
-    api_key_env: ANTHROPIC_API_KEY
-
+  openai: {enabled: false, api_key_env: OPENAI_API_KEY}
+  gemini: {enabled: false, api_key_env: GEMINI_API_KEY}
+  anthropic: {enabled: false, api_key_env: ANTHROPIC_API_KEY}
 routing:
+  default: {group: llm, profile: balanced}
+  unavailable_profile_policy: reject
+  unavailable_model_policy: use_fallback
   default_provider: local
-  allow_auto_remote: false
-  require_explicit_remote_provider: true
+  groups:
+    llm:
+      default_profile: balanced
+      profiles:
+        fast: {model: general-fast}
+        balanced: {model: general-balanced, fallbacks: [general-fast]}
+        deep: {model: general-deep, fallbacks: [general-balanced, general-fast]}
+    code:
+      default_profile: balanced
+      profiles:
+        fast: {model: general-fast}
+        balanced: {model: general-balanced, fallbacks: [general-fast]}
+        deep: {model: general-deep, fallbacks: [general-balanced, general-fast]}

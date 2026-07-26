@@ -60,12 +60,10 @@ func TestDaemonStatus(t *testing.T) {
 	cfg := testConfig()
 	cfg.Routing.DefaultProvider = "local"
 	cfg.ModelLifecycle.ResidentModel = "fast"
-	cfg.LocalModels = map[string]config.LocalModelConfig{
+	cfg.Models = map[string]config.ModelConfig{
 		"fast": {
-			Tier:     "fast",
-			Resident: true,
-			Backend:  config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
-			Runtime:  config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+			Backend: config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime: config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
 		},
 	}
 	server := NewServer(cfg, nil, nil)
@@ -96,42 +94,41 @@ func TestProvidersRequest(t *testing.T) {
 	}
 }
 
-func TestGenerateRequestResolvesModelTypeAndLevel(t *testing.T) {
+func TestGenerateRequestResolvesGroupAndProfile(t *testing.T) {
 	cfg := testConfig()
 	cfg.Queue.MaxDepth = 2
 	cfg.ModelLifecycle.ResidentModel = "llm-fast"
 	cfg.Routing.DefaultProvider = "local"
-	cfg.LocalModels = map[string]config.LocalModelConfig{
+	cfg.Routing.Default = config.RouteReference{Group: "llm", Profile: "fast"}
+	cfg.Routing.Groups = map[string]config.GroupConfig{
+		"llm": {DefaultProfile: "fast", Profiles: map[string]config.ProfileConfig{
+			"fast": {Model: "llm-fast"}, "balanced": {Model: "llm-balanced"},
+		}},
+		"code": {DefaultProfile: "balanced", Profiles: map[string]config.ProfileConfig{
+			"balanced": {Model: "code-balanced"},
+		}},
+	}
+	cfg.Models = map[string]config.ModelConfig{
 		"llm-balanced": {
-			ModelType: "llm",
-			Tier:      "balanced",
-			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
-			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+			Backend: config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime: config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
 		},
 		"llm-fast": {
-			ModelType: "llm",
-			Tier:      "fast",
-			Resident:  true,
-			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
-			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+			Backend: config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime: config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
 		},
 		"code-balanced": {
-			ModelType: "code",
-			Tier:      "balanced",
-			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
-			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
+			Backend: config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
+			Runtime: config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
 		},
 	}
 	server := NewServer(cfg, nil, nil)
 	client := newMemoryClient()
 
 	server.enqueueGenerate(client, protocol.Request{
-		Type:      protocol.MessageGenerate,
-		ID:        "req-1",
-		Provider:  "local",
-		ModelType: "code",
-		Level:     "balanced",
-		Input:     &protocol.Input{Kind: "prompt", Prompt: "hello"},
+		Type: protocol.MessageGenerate, ID: "req-1", Provider: "local",
+		Target: &protocol.ModelTarget{Group: "code", Profile: "balanced"},
+		Input:  &protocol.Input{Kind: "prompt", Prompt: "hello"},
 	})
 
 	event := readMemoryEvent(t, client)
@@ -805,11 +802,9 @@ func modelTestConfig(t *testing.T) config.Config {
 	cfg.Paths.ModelDir = t.TempDir()
 	cfg.ModelLifecycle.ResidentModel = "fast"
 	cfg.Routing.DefaultProvider = "local"
-	cfg.LocalModels = map[string]config.LocalModelConfig{
+	cfg.Models = map[string]config.ModelConfig{
 		"fast": {
 			CatalogID: "fast-catalog",
-			Tier:      "fast",
-			Resident:  true,
 			Backend:   config.LocalBackendConfig{Type: "process", Command: "/bin/runner", Transport: "stdio"},
 			Runtime:   config.LocalRuntimeSettings{ContextTokens: 1024, Threads: 2},
 		},

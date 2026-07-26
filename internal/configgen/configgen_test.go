@@ -3,6 +3,7 @@ package configgen
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BrandonYaniz/yllmd/internal/catalog"
@@ -27,6 +28,9 @@ func TestGenerateProducesLoadableConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(string(data), "config_version") || strings.Contains(string(data), "local_models") {
+		t.Fatalf("generated obsolete schema fields:\n%s", data)
+	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -41,8 +45,8 @@ func TestGenerateProducesLoadableConfig(t *testing.T) {
 	if loaded.Paths.ModelDir != "/home/alice/yllmd/models" {
 		t.Fatalf("model dir = %q", loaded.Paths.ModelDir)
 	}
-	if loaded.LocalModels["general-fast"].Runtime.GPULayers != -1 {
-		t.Fatalf("gpu layers = %d", loaded.LocalModels["general-fast"].Runtime.GPULayers)
+	if loaded.Models["general-fast"].Runtime.GPULayers != -1 {
+		t.Fatalf("gpu layers = %d", loaded.Models["general-fast"].Runtime.GPULayers)
 	}
 }
 

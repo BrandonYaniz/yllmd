@@ -9,7 +9,7 @@ import (
 )
 
 func TestDecodeGenerateRequest(t *testing.T) {
-	req, err := DecodeRequest([]byte(`{"type":"generate","id":"req-1","provider":"local","model_type":"code","level":"balanced","input":{"kind":"prompt","prompt":"hello"},"settings":{"max_tokens":12}}`))
+	req, err := DecodeRequest([]byte(`{"type":"generate","id":"req-1","provider":"local","target":{"group":"code","profile":"balanced"},"input":{"kind":"prompt","prompt":"hello"},"settings":{"max_tokens":12}}`))
 	if err != nil {
 		t.Fatalf("DecodeRequest returned error: %v", err)
 	}
@@ -22,8 +22,43 @@ func TestDecodeGenerateRequest(t *testing.T) {
 	if req.Settings.MaxTokens == nil || *req.Settings.MaxTokens != 12 {
 		t.Fatalf("unexpected max tokens: %#v", req.Settings.MaxTokens)
 	}
-	if req.ModelType != "code" || req.Level != "balanced" {
-		t.Fatalf("unexpected routing fields: model_type=%q level=%q", req.ModelType, req.Level)
+	if req.Target == nil || req.Target.Group != "code" || req.Target.Profile != "balanced" {
+		t.Fatalf("unexpected target: %#v", req.Target)
+	}
+}
+
+func TestDecodeAndValidateTarget(t *testing.T) {
+	req, err := DecodeRequest([]byte(`{"type":"generate","id":"req-1","target":{"group":"writing","profile":"draft-pass1"},"input":{"kind":"prompt","prompt":"hello"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := req.NormalizedTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Group != "writing" || target.Profile != "draft-pass1" {
+		t.Fatalf("target = %#v", target)
+	}
+}
+
+func TestDecodeRejectsRemovedRoutingFields(t *testing.T) {
+	for _, field := range []string{`"model_type":"llm"`, `"level":"deep"`} {
+		line := []byte(`{"type":"generate","id":"req-1",` + field + `,"input":{"kind":"prompt","prompt":"hello"}}`)
+		if _, err := DecodeRequest(line); err == nil {
+			t.Fatalf("expected %s to be rejected", field)
+		}
+	}
+}
+
+func TestNormalizeRejectsConflictingTargets(t *testing.T) {
+	for _, request := range []Request{
+		{Target: &ModelTarget{Model: "one"}, Model: "two"},
+		{Target: &ModelTarget{Model: "one", Group: "writing"}},
+		{Target: &ModelTarget{Profile: "draft"}},
+	} {
+		if _, err := request.NormalizedTarget(); err == nil {
+			t.Fatalf("expected error for %#v", request)
+		}
 	}
 }
 
@@ -236,12 +271,11 @@ func TestValidateGenerateRejectsInvalidRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "bad model type",
+			name: "mixed target modes",
 			req: Request{
-				Type:      MessageGenerate,
-				ID:        "req-1",
-				ModelType: "image",
-				Input:     &Input{Kind: "prompt", Prompt: "hello"},
+				Type: MessageGenerate, ID: "req-1", Model: "one",
+				Target: &ModelTarget{Model: "two"},
+				Input:  &Input{Kind: "prompt", Prompt: "hello"},
 			},
 		},
 	}
@@ -383,10 +417,10 @@ func TestWriteModelsEvent(t *testing.T) {
 				ID:          ModelID{Provider: "local", Name: "fast"},
 				Name:        "fast",
 				DisplayName: "fast",
-				ModelType:   "llm",
-				Level:       "fast",
-				Tier:        "fast",
+				CatalogID:   "catalog-fast",
+				Enabled:     true,
 				Resident:    true,
+				Runtime:     ModelRuntime{ContextTokens: 1024, Threads: 4, GPULayers: -1},
 				Capabilities: ModelCapabilities{
 					SupportsStreaming:        true,
 					SupportsLocalPreparation: true,
