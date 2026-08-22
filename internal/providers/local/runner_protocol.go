@@ -7,14 +7,10 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"strings"
 	"unicode/utf8"
 )
 
 const (
-	runnerProtocolVersion       = 2
-	runnerProtocolMinimum       = "26.07.16.01-Release"
-	runnerRequiredCapabilities  = uint64(0x7f)
 	runnerMaxFrameBytes         = 32 << 20
 	runnerMaxPromptBytes        = 16 << 20
 	runnerMaxStopCount          = 64
@@ -24,7 +20,6 @@ const (
 
 	runnerMessageGenerate = byte(0x01)
 	runnerMessageCancel   = byte(0x02)
-	runnerMessageShutdown = byte(0x03)
 
 	runnerFrameChunk     = byte(0x01)
 	runnerFrameError     = byte(0x03)
@@ -46,19 +41,10 @@ type runnerGenerate struct {
 	stops            []string
 }
 
-type runnerReady struct {
-	protocol     uint16
-	version      string
-	contextSize  uint32
-	capabilities uint64
-}
-
 type runnerCompletion struct {
-	finishReason           byte
-	inputTokens            uint32
-	outputTokens           uint32
-	promptMicroseconds     uint64
-	generationMicroseconds uint64
+	finishReason byte
+	inputTokens  uint32
+	outputTokens uint32
 }
 
 type runnerProtocolError struct {
@@ -79,7 +65,6 @@ func (e runnerProtocolError) Error() string {
 type runnerFrame struct {
 	tag         byte
 	chunk       string
-	ready       runnerReady
 	completed   runnerCompletion
 	runnerError *runnerProtocolError
 }
@@ -119,8 +104,7 @@ func encodeRunnerGenerate(request runnerGenerate) ([]byte, error) {
 	var payload bytes.Buffer
 	payload.Grow(64 + totalStopBytes + len(request.prompt))
 	payload.WriteByte(request.tokenizationMode)
-	payload.WriteByte(0)
-	writeUint16(&payload, uint16(len(request.stops)))
+	payload.WriteByte(byte(len(request.stops)))
 	writeUint32(&payload, request.maxTokens)
 	writeFloat64(&payload, request.temperature)
 	writeFloat64(&payload, request.topP)
@@ -133,7 +117,6 @@ func encodeRunnerGenerate(request runnerGenerate) ([]byte, error) {
 		writeUint32(&payload, uint32(len(stop)))
 		payload.WriteString(stop)
 	}
-	writeUint32(&payload, uint32(len(request.prompt)))
 	payload.WriteString(request.prompt)
 	if payload.Len() > runnerMaxFrameBytes {
 		return nil, fmt.Errorf("runner Generate payload exceeds %d-byte limit", runnerMaxFrameBytes)
@@ -142,7 +125,7 @@ func encodeRunnerGenerate(request runnerGenerate) ([]byte, error) {
 }
 
 func writeRunnerControl(writer io.Writer, messageType byte) error {
-	if messageType != runnerMessageCancel && messageType != runnerMessageShutdown {
+	if messageType != runnerMessageCancel {
 		return fmt.Errorf("unsupported runner control message 0x%02x", messageType)
 	}
 	return writeRunnerEnvelope(writer, messageType, nil)
@@ -176,8 +159,10 @@ func readRunnerProtocolFrame(reader io.Reader) (runnerFrame, error) {
 	}
 	switch header[0] {
 	case runnerFrameReady:
-		ready, err := decodeRunnerReady(payload)
-		return runnerFrame{tag: header[0], ready: ready}, err
+		if len(payload) != 0 {
+			return runnerFrame{}, fmt.Errorf("runner Ready length %d, want 0", len(payload))
+		}
+		return runnerFrame{tag: header[0]}, nil
 	case runnerFrameChunk:
 		chunk, err := decodeRunnerChunk(payload)
 		return runnerFrame{tag: header[0], chunk: chunk}, err
@@ -192,38 +177,8 @@ func readRunnerProtocolFrame(reader io.Reader) (runnerFrame, error) {
 	}
 }
 
-func decodeRunnerReady(payload []byte) (runnerReady, error) {
-	if len(payload) < 16 {
-		return runnerReady{}, errors.New("truncated runner Ready payload")
-	}
-	protocolVersion := binary.LittleEndian.Uint16(payload[0:2])
-	versionLength := int(binary.LittleEndian.Uint16(payload[2:4]))
-	expected := 4 + versionLength + 4 + 8
-	if len(payload) != expected {
-		return runnerReady{}, fmt.Errorf("runner Ready length %d, want %d", len(payload), expected)
-	}
-	version := string(payload[4 : 4+versionLength])
-	if version == "" || !utf8.ValidString(version) {
-		return runnerReady{}, errors.New("runner Ready contains invalid version")
-	}
-	offset := 4 + versionLength
-	return runnerReady{
-		protocol:     protocolVersion,
-		version:      version,
-		contextSize:  binary.LittleEndian.Uint32(payload[offset : offset+4]),
-		capabilities: binary.LittleEndian.Uint64(payload[offset+4 : offset+12]),
-	}, nil
-}
-
 func decodeRunnerChunk(payload []byte) (string, error) {
-	if len(payload) < 4 {
-		return "", errors.New("truncated runner Chunk payload")
-	}
-	length := int(binary.LittleEndian.Uint32(payload[:4]))
-	if length != len(payload)-4 {
-		return "", fmt.Errorf("runner Chunk length %d, want %d", length, len(payload)-4)
-	}
-	chunk := string(payload[4:])
+	chunk := string(payload)
 	if !utf8.ValidString(chunk) {
 		return "", errors.New("runner Chunk is not valid UTF-8")
 	}
@@ -231,37 +186,29 @@ func decodeRunnerChunk(payload []byte) (string, error) {
 }
 
 func decodeRunnerCompleted(payload []byte) (runnerCompletion, error) {
-	if len(payload) != 25 {
-		return runnerCompletion{}, fmt.Errorf("runner Completed length %d, want 25", len(payload))
+	if len(payload) != 9 {
+		return runnerCompletion{}, fmt.Errorf("runner Completed length %d, want 9", len(payload))
 	}
 	if payload[0] > 3 {
 		return runnerCompletion{}, fmt.Errorf("unknown runner finish reason %d", payload[0])
 	}
 	return runnerCompletion{
-		finishReason:           payload[0],
-		inputTokens:            binary.LittleEndian.Uint32(payload[1:5]),
-		outputTokens:           binary.LittleEndian.Uint32(payload[5:9]),
-		promptMicroseconds:     binary.LittleEndian.Uint64(payload[9:17]),
-		generationMicroseconds: binary.LittleEndian.Uint64(payload[17:25]),
+		finishReason: payload[0],
+		inputTokens:  binary.LittleEndian.Uint32(payload[1:5]),
+		outputTokens: binary.LittleEndian.Uint32(payload[5:9]),
 	}, nil
 }
 
 func decodeRunnerError(payload []byte) (runnerProtocolError, error) {
-	if len(payload) < 4 {
+	if len(payload) < 2 {
 		return runnerProtocolError{}, errors.New("truncated runner Error payload")
 	}
 	codeLength := int(binary.LittleEndian.Uint16(payload[:2]))
-	if len(payload) < 2+codeLength+2 {
+	if len(payload) < 2+codeLength {
 		return runnerProtocolError{}, errors.New("truncated runner Error code")
 	}
 	code := string(payload[2 : 2+codeLength])
-	offset := 2 + codeLength
-	messageLength := int(binary.LittleEndian.Uint16(payload[offset : offset+2]))
-	offset += 2
-	if len(payload) != offset+messageLength {
-		return runnerProtocolError{}, errors.New("invalid runner Error message length")
-	}
-	message := string(payload[offset:])
+	message := string(payload[2+codeLength:])
 	if code == "" || !utf8.ValidString(code) || !utf8.ValidString(message) {
 		return runnerProtocolError{}, errors.New("runner Error contains invalid text")
 	}
@@ -326,43 +273,4 @@ func writeUint64(buffer *bytes.Buffer, value uint64) {
 
 func writeFloat64(buffer *bytes.Buffer, value float64) {
 	writeUint64(buffer, math.Float64bits(value))
-}
-
-func compareRunnerVersions(left, right string) (int, error) {
-	leftParts, err := parseRunnerVersion(left)
-	if err != nil {
-		return 0, err
-	}
-	rightParts, err := parseRunnerVersion(right)
-	if err != nil {
-		return 0, err
-	}
-	for i := range leftParts {
-		if leftParts[i] < rightParts[i] {
-			return -1, nil
-		}
-		if leftParts[i] > rightParts[i] {
-			return 1, nil
-		}
-	}
-	return 0, nil
-}
-
-func parseRunnerVersion(value string) ([4]int, error) {
-	var result [4]int
-	base := strings.TrimSuffix(value, "-Release")
-	if base == value && strings.Contains(value, "-") {
-		return result, fmt.Errorf("runner version %q has unsupported suffix", value)
-	}
-	parts := strings.Split(base, ".")
-	if len(parts) != len(result) {
-		return result, fmt.Errorf("runner version %q must use YY.MM.DD.NN[-Release]", value)
-	}
-	for i, part := range parts {
-		if len(part) != 2 || part[0] < '0' || part[0] > '9' || part[1] < '0' || part[1] > '9' {
-			return result, fmt.Errorf("runner version %q must use YY.MM.DD.NN[-Release]", value)
-		}
-		result[i] = int(part[0]-'0')*10 + int(part[1]-'0')
-	}
-	return result, nil
 }

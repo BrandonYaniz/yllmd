@@ -592,7 +592,6 @@ func (p *RunnerProvider) sessionFor(ctx context.Context, model models.LocalModel
 
 func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalModel) (*runnerSession, error) {
 	cmd := exec.Command(model.Config.Backend.Command,
-		"--protocol", strconv.Itoa(runnerProtocolVersion),
 		"--model", model.ModelPath,
 		"--ctx", strconv.Itoa(model.Config.Runtime.ContextTokens),
 		"--threads", strconv.Itoa(model.Config.Runtime.Threads),
@@ -643,10 +642,6 @@ func (p *RunnerProvider) startSession(ctx context.Context, model models.LocalMod
 		_ = session.close(context.Background(), "startup-invalid")
 		return nil, fmt.Errorf("runner first frame 0x%02x is not Ready", frame.tag)
 	}
-	if err := validateRunnerReady(frame.ready, model.Config.Runtime.ContextTokens); err != nil {
-		_ = session.close(context.Background(), "startup-invalid")
-		return nil, err
-	}
 	return session, nil
 }
 
@@ -686,20 +681,9 @@ func (s *runnerSession) cancelAndDrain() error {
 		case runnerFrameChunk:
 			continue
 		case runnerFrameCompleted:
-			if frame.completed.finishReason == 3 {
-				return nil
-			}
-			// The request completed before Cancel was observed. The queued Cancel
-			// will now be answered with no_active_request; consume it so the next
-			// Generate starts on a clean protocol stream.
-			followup, err := s.readFrame(ctx)
-			if err != nil {
-				return fmt.Errorf("drain late runner Cancel: %w", err)
-			}
-			if followup.tag == runnerFrameError && followup.runnerError != nil && followup.runnerError.code == "no_active_request" {
-				return nil
-			}
-			return fmt.Errorf("unexpected frame 0x%02x after late runner Cancel", followup.tag)
+			// A late Cancel is silently ignored by the runner while idle. Since it
+			// precedes any future Generate on stdin, the session remains reusable.
+			return nil
 		case runnerFrameError:
 			if frame.runnerError != nil {
 				return fmt.Errorf("runner cancellation: %w", *frame.runnerError)
@@ -711,26 +695,6 @@ func (s *runnerSession) cancelAndDrain() error {
 	}
 }
 
-func validateRunnerReady(ready runnerReady, requestedContext int) error {
-	if ready.protocol != runnerProtocolVersion {
-		return fmt.Errorf("runner selected protocol %d, want %d", ready.protocol, runnerProtocolVersion)
-	}
-	if ready.capabilities&runnerRequiredCapabilities != runnerRequiredCapabilities {
-		return fmt.Errorf("runner capabilities 0x%x do not include required 0x%x", ready.capabilities, runnerRequiredCapabilities)
-	}
-	if ready.contextSize < uint32(requestedContext) {
-		return fmt.Errorf("runner context size %d is smaller than requested %d", ready.contextSize, requestedContext)
-	}
-	comparison, err := compareRunnerVersions(ready.version, runnerProtocolMinimum)
-	if err != nil {
-		return err
-	}
-	if comparison < 0 {
-		return fmt.Errorf("runner version %s is older than required %s", ready.version, runnerProtocolMinimum)
-	}
-	return nil
-}
-
 func (s *runnerSession) close(ctx context.Context, _ string) error {
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
@@ -740,7 +704,6 @@ func (s *runnerSession) close(ctx context.Context, _ string) error {
 	s.closed = true
 
 	s.stdinMu.Lock()
-	_ = writeRunnerControl(s.stdin, runnerMessageShutdown)
 	_ = s.stdin.Close()
 	s.stdinMu.Unlock()
 	select {

@@ -60,7 +60,10 @@ install -d -o yllmd -g yllm -m 0750 /var/lib/yllmd /var/lib/yllmd/models /var/ru
 
 Edit `/usr/local/etc/yllmd/config.yaml` to define concrete models, routing groups and profiles, and the runner path before starting the service.
 
-Install `yllama-runner` `26.07.16.01-Release` or newer. `yllmd` selects protocol 2 and refuses startup frames that report an older version, missing capabilities, or a smaller context than configured.
+Install `yllama-runner` commit `452e194` or a release containing it. `yllmd`
+uses the runner's compact binary stdio contract and waits for its empty `Ready`
+frame after model loading. The runner command no longer accepts a protocol
+selection flag; closing stdin requests a clean shutdown.
 
 ## Linux systemd
 

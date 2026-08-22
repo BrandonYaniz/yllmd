@@ -92,7 +92,7 @@ func TestRunnerProviderGenerateCompact(t *testing.T) {
 		t.Fatalf("read runner log: %v", err)
 	}
 	log := string(data)
-	for _, want := range []string{"--protocol=2", "--model", "--ctx=1024", "--threads=2", "--gpu-layers=0", "generate mode=0", "max_tokens=128", "temperature=0.8", "top_p=0.95", "prompt hello"} {
+	for _, want := range []string{"--model", "--ctx=1024", "--threads=2", "--gpu-layers=0", "generate mode=0", "max_tokens=128", "temperature=0.8", "top_p=0.95", "prompt hello"} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("runner log missing %q:\n%s", want, log)
 		}
@@ -297,6 +297,24 @@ func TestRunnerProviderReusesSessionForSameModel(t *testing.T) {
 	}
 	if count := strings.Count(log, "generate "); count != 2 {
 		t.Fatalf("generate count = %d, log:\n%s", count, log)
+	}
+}
+
+func TestRunnerProviderCloseUsesStdinEOF(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runner.log")
+	t.Setenv("YLLMD_FAKE_RUNNER_LOG", logPath)
+	runnerPath := writeFakeRunner(t)
+	provider := NewRunnerProvider(runnerTestConfig(t, runnerPath), nil)
+
+	drainGenerate(t, provider, "req-close", "close cleanly")
+	closeProvider(t, provider)
+
+	log := string(mustReadFile(t, logPath))
+	if !strings.Contains(log, "eof") {
+		t.Fatalf("runner did not observe stdin EOF:\n%s", log)
+	}
+	if strings.Contains(log, "unexpected message") {
+		t.Fatalf("provider sent an unsupported shutdown message:\n%s", log)
 	}
 }
 
@@ -522,7 +540,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -554,19 +571,20 @@ func main() {
 	if response == "" {
 		response = "fake runner response"
 	}
-	logEvent("start %s --protocol=%s --model %s --ctx=%s --threads=%s --gpu-layers=%s",
+	logEvent("start %s --model %s --ctx=%s --threads=%s --gpu-layers=%s",
 		filepath.Base(flagValue(args, "--model")),
-		flagValue(args, "--protocol"),
 		flagValue(args, "--model"),
 		flagValue(args, "--ctx"),
 		flagValue(args, "--threads"),
 		flagValue(args, "--gpu-layers"))
-	contextSize, _ := strconv.Atoi(flagValue(args, "--ctx"))
-	writeReady(uint32(contextSize))
+	writeReady()
 
 	for {
 		kind, payload, err := readFrame()
 		if err != nil {
+			if err == io.EOF {
+				logEvent("eof")
+			}
 			if err != io.EOF && err != io.ErrUnexpectedEOF {
 				logEvent("read_error %v", err)
 			}
@@ -609,10 +627,9 @@ func main() {
 			}
 			writeCompleted(reason, 3, 2)
 		case 2:
-			writeError("no_active_request", "Cancel received with no active Generate")
-		case 3:
-			logEvent("shutdown")
-			return
+			continue
+		default:
+			logEvent("unexpected message type=%d", kind)
 		}
 	}
 }
@@ -629,29 +646,26 @@ type generateRequest struct {
 
 func decodeGenerate(payload []byte) (generateRequest, error) {
 	var request generateRequest
-	if len(payload) < 64 {
+	if len(payload) < 58 {
 		return request, fmt.Errorf("short payload")
 	}
 	request.mode = payload[0]
-	stopCount := int(binary.LittleEndian.Uint16(payload[2:4]))
-	request.maxTokens = binary.LittleEndian.Uint32(payload[4:8])
-	request.temperature = math.Float64frombits(binary.LittleEndian.Uint64(payload[8:16]))
-	request.topP = math.Float64frombits(binary.LittleEndian.Uint64(payload[16:24]))
-	request.topK = int32(binary.LittleEndian.Uint32(payload[24:28]))
-	request.minP = math.Float64frombits(binary.LittleEndian.Uint64(payload[28:36]))
-	request.presence = math.Float64frombits(binary.LittleEndian.Uint64(payload[36:44]))
-	request.repeat = math.Float64frombits(binary.LittleEndian.Uint64(payload[44:52]))
-	request.seed = binary.LittleEndian.Uint64(payload[52:60])
-	offset := 60
+	stopCount := int(payload[1])
+	request.maxTokens = binary.LittleEndian.Uint32(payload[2:6])
+	request.temperature = math.Float64frombits(binary.LittleEndian.Uint64(payload[6:14]))
+	request.topP = math.Float64frombits(binary.LittleEndian.Uint64(payload[14:22]))
+	request.topK = int32(binary.LittleEndian.Uint32(payload[22:26]))
+	request.minP = math.Float64frombits(binary.LittleEndian.Uint64(payload[26:34]))
+	request.presence = math.Float64frombits(binary.LittleEndian.Uint64(payload[34:42]))
+	request.repeat = math.Float64frombits(binary.LittleEndian.Uint64(payload[42:50]))
+	request.seed = binary.LittleEndian.Uint64(payload[50:58])
+	offset := 58
 	for i := 0; i < stopCount; i++ {
 		if offset+4 > len(payload) { return request, fmt.Errorf("short stop length") }
 		length := int(binary.LittleEndian.Uint32(payload[offset:offset+4])); offset += 4
 		if offset+length > len(payload) { return request, fmt.Errorf("short stop") }
 		request.stops = append(request.stops, string(payload[offset:offset+length])); offset += length
 	}
-	if offset+4 > len(payload) { return request, fmt.Errorf("short prompt length") }
-	length := int(binary.LittleEndian.Uint32(payload[offset:offset+4])); offset += 4
-	if offset+length != len(payload) { return request, fmt.Errorf("bad prompt length") }
 	request.prompt = string(payload[offset:])
 	return request, nil
 }
@@ -672,22 +686,12 @@ func writeFrame(kind byte, payload []byte) {
 	os.Stdout.Write(header[:]); os.Stdout.Write(payload)
 }
 
-func writeReady(contextSize uint32) {
-	version := "26.07.16.01-Release"
-	var payload bytes.Buffer
-	binary.Write(&payload, binary.LittleEndian, uint16(2))
-	binary.Write(&payload, binary.LittleEndian, uint16(len(version)))
-	payload.WriteString(version)
-	binary.Write(&payload, binary.LittleEndian, contextSize)
-	binary.Write(&payload, binary.LittleEndian, uint64(0x7f))
-	writeFrame(0x10, payload.Bytes())
+func writeReady() {
+	writeFrame(0x10, nil)
 }
 
 func writeChunk(text string) {
-	var payload bytes.Buffer
-	binary.Write(&payload, binary.LittleEndian, uint32(len(text)))
-	payload.WriteString(text)
-	writeFrame(1, payload.Bytes())
+	writeFrame(1, []byte(text))
 }
 
 func writeCompleted(reason byte, inputTokens, outputTokens uint32) {
@@ -695,15 +699,13 @@ func writeCompleted(reason byte, inputTokens, outputTokens uint32) {
 	payload.WriteByte(reason)
 	binary.Write(&payload, binary.LittleEndian, inputTokens)
 	binary.Write(&payload, binary.LittleEndian, outputTokens)
-	binary.Write(&payload, binary.LittleEndian, uint64(10))
-	binary.Write(&payload, binary.LittleEndian, uint64(20))
 	writeFrame(4, payload.Bytes())
 }
 
 func writeError(code, message string) {
 	var payload bytes.Buffer
 	binary.Write(&payload, binary.LittleEndian, uint16(len(code))); payload.WriteString(code)
-	binary.Write(&payload, binary.LittleEndian, uint16(len(message))); payload.WriteString(message)
+	payload.WriteString(message)
 	writeFrame(3, payload.Bytes())
 }
 `

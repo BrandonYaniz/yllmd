@@ -27,38 +27,35 @@ func TestEncodeRunnerGenerateLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload[0] != runnerTokenizationFormatted || payload[1] != 0 {
-		t.Fatalf("mode/reserved = %v", payload[:2])
+	if payload[0] != runnerTokenizationFormatted || payload[1] != 2 {
+		t.Fatalf("mode/stop count = %v", payload[:2])
 	}
-	if got := binary.LittleEndian.Uint16(payload[2:4]); got != 2 {
-		t.Fatalf("stop count = %d", got)
-	}
-	if got := binary.LittleEndian.Uint32(payload[4:8]); got != 321 {
+	if got := binary.LittleEndian.Uint32(payload[2:6]); got != 321 {
 		t.Fatalf("max tokens = %d", got)
 	}
-	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[8:16])); got != 0.25 {
+	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[6:14])); got != 0.25 {
 		t.Fatalf("temperature = %g", got)
 	}
-	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[16:24])); got != 0.9 {
+	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[14:22])); got != 0.9 {
 		t.Fatalf("top_p = %g", got)
 	}
-	if got := int32(binary.LittleEndian.Uint32(payload[24:28])); got != 17 {
+	if got := int32(binary.LittleEndian.Uint32(payload[22:26])); got != 17 {
 		t.Fatalf("top_k = %d", got)
 	}
-	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[28:36])); got != 0.05 {
+	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[26:34])); got != 0.05 {
 		t.Fatalf("min_p = %g", got)
 	}
-	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[36:44])); got != -0.2 {
+	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[34:42])); got != -0.2 {
 		t.Fatalf("presence penalty = %g", got)
 	}
-	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[44:52])); got != 1.1 {
+	if got := math.Float64frombits(binary.LittleEndian.Uint64(payload[42:50])); got != 1.1 {
 		t.Fatalf("repeat penalty = %g", got)
 	}
-	if got := binary.LittleEndian.Uint64(payload[52:60]); got != 42 {
+	if got := binary.LittleEndian.Uint64(payload[50:58]); got != 42 {
 		t.Fatalf("seed = %d", got)
 	}
-	offset := 60
-	for _, want := range []string{"END", "STOP", "hello"} {
+	offset := 58
+	for _, want := range []string{"END", "STOP"} {
 		length := int(binary.LittleEndian.Uint32(payload[offset : offset+4]))
 		offset += 4
 		if got := string(payload[offset : offset+length]); got != want {
@@ -66,49 +63,39 @@ func TestEncodeRunnerGenerateLayout(t *testing.T) {
 		}
 		offset += length
 	}
-	if offset != len(payload) {
-		t.Fatalf("decoded %d of %d bytes", offset, len(payload))
+	if got := string(payload[offset:]); got != "hello" {
+		t.Fatalf("prompt = %q, want hello", got)
+	}
+	if offset+len("hello") != len(payload) {
+		t.Fatalf("decoded %d of %d bytes", offset+len("hello"), len(payload))
 	}
 }
 
 func TestReadRunnerProtocolFrames(t *testing.T) {
 	var stream bytes.Buffer
-	version := runnerProtocolMinimum
-	var ready bytes.Buffer
-	writeUint16(&ready, runnerProtocolVersion)
-	writeUint16(&ready, uint16(len(version)))
-	ready.WriteString(version)
-	writeUint32(&ready, 4096)
-	writeUint64(&ready, runnerRequiredCapabilities)
-	if err := writeRunnerEnvelope(&stream, runnerFrameReady, ready.Bytes()); err != nil {
+	if err := writeRunnerEnvelope(&stream, runnerFrameReady, nil); err != nil {
 		t.Fatal(err)
 	}
-	var chunk bytes.Buffer
-	writeUint32(&chunk, 2)
-	chunk.WriteString("ok")
-	if err := writeRunnerEnvelope(&stream, runnerFrameChunk, chunk.Bytes()); err != nil {
+	if err := writeRunnerEnvelope(&stream, runnerFrameChunk, []byte("ok")); err != nil {
 		t.Fatal(err)
 	}
 	var completed bytes.Buffer
 	completed.WriteByte(2)
 	writeUint32(&completed, 11)
 	writeUint32(&completed, 7)
-	writeUint64(&completed, 100)
-	writeUint64(&completed, 200)
 	if err := writeRunnerEnvelope(&stream, runnerFrameCompleted, completed.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	var protocolError bytes.Buffer
 	writeUint16(&protocolError, uint16(len("busy")))
 	protocolError.WriteString("busy")
-	writeUint16(&protocolError, uint16(len("try later")))
 	protocolError.WriteString("try later")
 	if err := writeRunnerEnvelope(&stream, runnerFrameError, protocolError.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 
 	frame, err := readRunnerProtocolFrame(&stream)
-	if err != nil || frame.ready.version != version || frame.ready.contextSize != 4096 {
+	if err != nil || frame.tag != runnerFrameReady {
 		t.Fatalf("Ready = %#v, %v", frame, err)
 	}
 	frame, err = readRunnerProtocolFrame(&stream)
@@ -116,7 +103,7 @@ func TestReadRunnerProtocolFrames(t *testing.T) {
 		t.Fatalf("Chunk = %#v, %v", frame, err)
 	}
 	frame, err = readRunnerProtocolFrame(&stream)
-	if err != nil || frame.completed.finishReason != 2 || frame.completed.inputTokens != 11 || frame.completed.outputTokens != 7 || frame.completed.promptMicroseconds != 100 || frame.completed.generationMicroseconds != 200 {
+	if err != nil || frame.completed.finishReason != 2 || frame.completed.inputTokens != 11 || frame.completed.outputTokens != 7 {
 		t.Fatalf("Completed = %#v, %v", frame, err)
 	}
 	frame, err = readRunnerProtocolFrame(&stream)
@@ -134,11 +121,18 @@ func TestReadRunnerProtocolFrameRejectsOversizeBeforePayloadRead(t *testing.T) {
 }
 
 func TestDecodeRunnerChunkRejectsInvalidData(t *testing.T) {
-	if _, err := decodeRunnerChunk([]byte{2, 0, 0, 0, 'x'}); err == nil {
-		t.Fatal("expected length error")
-	}
-	if _, err := decodeRunnerChunk([]byte{1, 0, 0, 0, 0xff}); err == nil {
+	if _, err := decodeRunnerChunk([]byte{0xff}); err == nil {
 		t.Fatal("expected UTF-8 error")
+	}
+}
+
+func TestReadRunnerReadyRejectsPayload(t *testing.T) {
+	var stream bytes.Buffer
+	if err := writeRunnerEnvelope(&stream, runnerFrameReady, []byte{0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readRunnerProtocolFrame(&stream); err == nil || !strings.Contains(err.Error(), "want 0") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -155,49 +149,6 @@ func TestWriteRunnerEnvelopeHandlesShortWrites(t *testing.T) {
 	err := writeAll(zeroWriter{}, []byte("x"))
 	if !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestValidateRunnerReady(t *testing.T) {
-	valid := runnerReady{protocol: 2, version: runnerProtocolMinimum, contextSize: 4096, capabilities: runnerRequiredCapabilities}
-	if err := validateRunnerReady(valid, 4096); err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name  string
-		ready runnerReady
-		want  string
-	}{
-		{"protocol", runnerReady{protocol: 1, version: valid.version, contextSize: 4096, capabilities: valid.capabilities}, "protocol"},
-		{"capabilities", runnerReady{protocol: 2, version: valid.version, contextSize: 4096}, "capabilities"},
-		{"context", runnerReady{protocol: 2, version: valid.version, contextSize: 2048, capabilities: valid.capabilities}, "smaller"},
-		{"version", runnerReady{protocol: 2, version: "26.07.15.99-Release", contextSize: 4096, capabilities: valid.capabilities}, "older"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := validateRunnerReady(test.ready, 4096); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v", err)
-			}
-		})
-	}
-}
-
-func TestCompareRunnerVersions(t *testing.T) {
-	for _, test := range []struct {
-		left, right string
-		want        int
-	}{
-		{"26.07.16.01-Release", "26.07.16.01", 0},
-		{"26.07.17.01-Release", "26.07.16.99-Release", 1},
-		{"25.12.31.99", "26.01.01.01", -1},
-	} {
-		got, err := compareRunnerVersions(test.left, test.right)
-		if err != nil || got != test.want {
-			t.Fatalf("compare(%q, %q) = %d, %v; want %d", test.left, test.right, got, err, test.want)
-		}
-	}
-	if _, err := compareRunnerVersions("v2", runnerProtocolMinimum); err == nil {
-		t.Fatal("expected malformed version error")
 	}
 }
 

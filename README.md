@@ -33,7 +33,11 @@ client applications
   -> local runner
 ```
 
-Local inference is handled by `yllama-runner` `26.07.16.01-Release` or newer over protocol-2 binary stdio frames. Models remain resident across sequential requests, while sampling settings, stop sequences, usage counters, cancellation, and graceful shutdown are carried by the framed protocol.
+Local inference is handled by a current `yllama-runner` using its compact binary
+stdio contract (commit `452e194` or a release containing it). Models remain
+resident across sequential requests, while sampling settings, stop sequences,
+usage counters, and cancellation are carried by framed messages. Closing runner
+stdin performs a graceful shutdown.
 
 ## Status
 
